@@ -1,0 +1,8 @@
+numpy>=1.20.0
+numba
+matplotlib
+dask
+dask-ms
+xarray
+tqdm
+psutil

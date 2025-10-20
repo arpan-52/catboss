@@ -1,0 +1,2 @@
+[console_scripts]
+catboss = catboss.cli:main

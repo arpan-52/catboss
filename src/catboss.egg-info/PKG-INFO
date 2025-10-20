@@ -1,0 +1,30 @@
+Metadata-Version: 2.2
+Name: catboss
+Version: 0.1.0
+Summary: A suite of radio astronomy flagging tools
+Home-page: https://github.com/yourname/catboss
+Author: Arpan Pal
+Author-email: arpan522000@gmail.com
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Scientific/Engineering :: Astronomy
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.20.0
+Requires-Dist: numba
+Requires-Dist: matplotlib
+Requires-Dist: dask
+Requires-Dist: dask-ms
+Requires-Dist: xarray
+Requires-Dist: tqdm
+Requires-Dist: psutil
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

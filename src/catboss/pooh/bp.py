@@ -1061,7 +1061,8 @@ def process_baseline_async(bl_data, bl, field_id, corr_to_process, options, freq
     
     # Initialize flags array if we need to return flags
     if options['apply_flags']:
-        combined_flags = np.zeros((bl_data.DATA.shape[0], bl_data.DATA.shape[1], bl_data.DATA.shape[2]), dtype=bool)
+        # CRITICAL: Start with original flags to preserve flags in correlations not being processed
+        combined_flags = bl_data.FLAG.copy()
     else:
         combined_flags = None
     

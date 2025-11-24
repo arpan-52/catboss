@@ -1,10 +1,9 @@
-import gc 
+import gc
 import matplotlib
-matplotlib.use('Agg') 
+matplotlib.use('Agg')
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-from numba import cuda
 import os
 import argparse
 import dask.array as da
@@ -15,6 +14,19 @@ import xarray as xr
 import dask
 import psutil
 import concurrent.futures
+
+# Check GPU availability
+try:
+    from numba import cuda
+    GPU_AVAILABLE = cuda.is_available()
+    if GPU_AVAILABLE:
+        print("GPU detected - will use GPU acceleration")
+    else:
+        print("No GPU detected - will use CPU processing")
+except Exception as e:
+    print(f"GPU check failed: {e} - will use CPU processing")
+    GPU_AVAILABLE = False
+    cuda = None
 
 def apply_flags_to_ms(ms_file, bl, field_id, new_flags):
     """Apply flags to the MS file for a specific baseline"""
@@ -110,10 +122,120 @@ def print_gpu_info():
     
     print("======================")
 
-@cuda.jit
-def sum_threshold_kernel_time_channel(amp, flags, thresholds, M):
-    """Improved CUDA kernel for SumThreshold in time direction with better flagging logic"""
-    i, j = cuda.grid(2)
+# ==================== CPU IMPLEMENTATIONS ====================
+def sum_threshold_cpu_time_channel(amp, flags, thresholds, M):
+    """CPU implementation of SumThreshold in time direction"""
+    for i in range(amp.shape[0]):
+        for j in range(amp.shape[1] - M + 1):
+            # Calculate average threshold for this group
+            avg_threshold = np.mean(thresholds[j:j+M])
+
+            # Count unflagged points and calculate their sum
+            group_sum = 0.0
+            count = 0
+            for k in range(M):
+                if not flags[i, j+k]:
+                    group_sum += amp[i, j+k]
+                    count += 1
+
+            # Only proceed if we have enough unflagged points (at least 30%)
+            min_unflagged = max(1, int(M * 0.3))
+
+            if count >= min_unflagged:
+                # Check if the average exceeds the threshold
+                if (group_sum / count) > avg_threshold:
+                    # Flag samples that exceed the threshold
+                    for k in range(M):
+                        if not flags[i, j+k]:
+                            # Flag more conservatively for low amplitudes
+                            if amp[i, j+k] < avg_threshold * 0.5:
+                                # For very low amplitudes, require higher confidence
+                                if amp[i, j+k] > thresholds[j+k] * 1.2:
+                                    flags[i, j+k] = True
+                            else:
+                                # For normal/high amplitudes, use standard threshold
+                                if amp[i, j+k] > thresholds[j+k]:
+                                    flags[i, j+k] = True
+
+def sum_threshold_cpu_freq_channel(amp, flags, thresholds, M):
+    """CPU implementation of SumThreshold in frequency direction"""
+    for i in range(amp.shape[0] - M + 1):
+        for j in range(amp.shape[1]):
+            # Get threshold for this channel
+            threshold = thresholds[j]
+
+            # Count unflagged points and calculate their sum
+            group_sum = 0.0
+            count = 0
+            for k in range(M):
+                if not flags[i+k, j]:
+                    group_sum += amp[i+k, j]
+                    count += 1
+
+            # Only proceed if we have enough unflagged points (at least 30%)
+            min_unflagged = max(1, int(M * 0.3))
+
+            if count >= min_unflagged:
+                # Check if the average exceeds the threshold
+                if (group_sum / count) > threshold:
+                    # Flag samples that exceed the threshold
+                    for k in range(M):
+                        if not flags[i+k, j]:
+                            # Flag more conservatively for low amplitudes
+                            if amp[i+k, j] < threshold * 0.5:
+                                # For very low amplitudes, require higher confidence
+                                if amp[i+k, j] > threshold * 1.2:
+                                    flags[i+k, j] = True
+                            else:
+                                # For normal/high amplitudes, use standard threshold
+                                if amp[i+k, j] > threshold:
+                                    flags[i+k, j] = True
+
+def bandpass_normalize_cpu(amp, flags, rfi_threshold):
+    """CPU implementation of bandpass normalization"""
+    for channel_idx in range(amp.shape[1]):
+        # Calculate median for this channel
+        unflagged_data = amp[~flags[:, channel_idx], channel_idx]
+
+        if len(unflagged_data) > 0:
+            bandpass_value = np.median(unflagged_data)
+        else:
+            bandpass_value = 0.0
+
+        # Check if channel is RFI-affected by comparing with neighbors
+        is_rfi = False
+        if bandpass_value > 0:
+            # Calculate neighbor statistics
+            neighbor_vals = []
+            for offset in range(-3, 4):
+                if offset != 0:
+                    neighbor_idx = channel_idx + offset
+                    if 0 <= neighbor_idx < amp.shape[1]:
+                        neighbor_data = amp[~flags[:, neighbor_idx], neighbor_idx]
+                        if len(neighbor_data) > 0:
+                            neighbor_vals.append(np.median(neighbor_data))
+
+            # Check if this channel is an outlier
+            if len(neighbor_vals) > 0:
+                neighbor_avg = np.mean(neighbor_vals)
+                if bandpass_value > neighbor_avg * rfi_threshold:
+                    is_rfi = True
+
+        # Normalize or flag
+        if is_rfi:
+            # Flag RFI channel
+            flags[:, channel_idx] = True
+        elif bandpass_value > 0:
+            # Normalize by bandpass (only unflagged data)
+            mask = ~flags[:, channel_idx]
+            amp[mask, channel_idx] = amp[mask, channel_idx] / bandpass_value
+
+# ==================== GPU IMPLEMENTATIONS ====================
+if GPU_AVAILABLE:
+    @cuda.jit
+    def sum_threshold_kernel_time_channel(amp, flags, thresholds, M):
+        """Improved CUDA kernel for SumThreshold in time direction with better flagging logic"""
+        i, j = cuda.grid(2)
     
     if i < amp.shape[0] and j < amp.shape[1] - M + 1:
         # Calculate average threshold for this group
@@ -1067,7 +1189,8 @@ def process_baseline_async(bl_data, bl, field_id, corr_to_process, options, freq
     
     # Initialize flags array if needed
     if options['apply_flags']:
-        combined_flags = np.zeros_like(bl_data.FLAG.copy())
+        # CRITICAL: Start with original flags to preserve flags in correlations not being processed
+        combined_flags = bl_data.FLAG.copy()
     else:
         combined_flags = None
     

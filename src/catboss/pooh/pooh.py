@@ -102,15 +102,20 @@ def apply_flags_to_ms(ms_file, bl, field_id, new_flags):
         return False
 
 def print_gpu_info():
-    """Print basic information about available GPUs"""
-    print("=== GPU Information ===")
+    """Print basic information about available GPUs or CPU mode"""
+    print("=== Hardware Information ===")
+    if not GPU_AVAILABLE:
+        print("Running in CPU mode - no GPU available")
+        print("============================")
+        return
+
     try:
         devices = cuda.list_devices()
         print(f"Number of available GPUs: {len(devices)}")
-        
+
         device = cuda.get_current_device()
         print(f"GPU 0: {device.name}")
-        
+
         # Get compute capability
         try:
             cc = device.compute_capability
@@ -119,8 +124,8 @@ def print_gpu_info():
             print("  - Compute capability info not available")
     except Exception as e:
         print(f"Error getting GPU info: {str(e)}")
-    
-    print("======================")
+
+    print("============================")
 
 # ==================== CPU IMPLEMENTATIONS ====================
 def sum_threshold_cpu_time_channel(amp, flags, thresholds, M):
@@ -236,78 +241,170 @@ if GPU_AVAILABLE:
     def sum_threshold_kernel_time_channel(amp, flags, thresholds, M):
         """Improved CUDA kernel for SumThreshold in time direction with better flagging logic"""
         i, j = cuda.grid(2)
-    
-    if i < amp.shape[0] and j < amp.shape[1] - M + 1:
-        # Calculate average threshold for this group
-        avg_threshold = 0.0
-        for k in range(M):
-            avg_threshold += thresholds[j+k]
-        avg_threshold /= M
-        
-        # Count unflagged points and calculate their sum
-        group_sum = 0.0
-        count = 0
-        
-        for k in range(M):
-            if not flags[i, j+k]:
-                group_sum += amp[i, j+k]
-                count += 1
-        
-        # Only proceed if we have enough unflagged points (at least 30%)
-        min_unflagged = max(1, int(M * 0.3))
-        
-        if count >= min_unflagged:
-            # Check if the average exceeds the threshold
-            if (group_sum / count) > avg_threshold:
-                # Flag samples that exceed the threshold
-                for k in range(M):
-                    if not flags[i, j+k]:
-                        # Flag more conservatively for low amplitudes
-                        if amp[i, j+k] < avg_threshold * 0.5:
-                            # For very low amplitudes, require higher confidence
-                            if amp[i, j+k] > thresholds[j+k] * 1.2:
-                                flags[i, j+k] = True
-                        else:
-                            # For normal/high amplitudes, use standard threshold
-                            if amp[i, j+k] > thresholds[j+k]:
-                                flags[i, j+k] = True
 
-@cuda.jit
-def sum_threshold_kernel_freq_channel(amp, flags, thresholds, M):
-    """Improved CUDA kernel for SumThreshold in frequency direction with better flagging logic"""
-    i, j = cuda.grid(2)
-    
-    if i < amp.shape[0] - M + 1 and j < amp.shape[1]:
-        # Get threshold for this channel
-        threshold = thresholds[j]
-        
-        # Count unflagged points and calculate their sum
-        group_sum = 0.0
-        count = 0
-        
-        for k in range(M):
-            if not flags[i+k, j]:
-                group_sum += amp[i+k, j]
-                count += 1
-        
-        # Only proceed if we have enough unflagged points (at least 30%)
-        min_unflagged = max(1, int(M * 0.3))
-        
-        if count >= min_unflagged:
-            # Check if the average exceeds the threshold
-            if (group_sum / count) > threshold:
-                # Flag samples that exceed the threshold
-                for k in range(M):
-                    if not flags[i+k, j]:
-                        # Flag more conservatively for low amplitudes
-                        if amp[i+k, j] < threshold * 0.5:
-                            # For very low amplitudes, require higher confidence
-                            if amp[i+k, j] > threshold * 1.2:
-                                flags[i+k, j] = True
-                        else:
-                            # For normal/high amplitudes, use standard threshold
-                            if amp[i+k, j] > threshold:
-                                flags[i+k, j] = True
+        if i < amp.shape[0] and j < amp.shape[1] - M + 1:
+            # Calculate average threshold for this group
+            avg_threshold = 0.0
+            for k in range(M):
+                avg_threshold += thresholds[j+k]
+            avg_threshold /= M
+
+            # Count unflagged points and calculate their sum
+            group_sum = 0.0
+            count = 0
+
+            for k in range(M):
+                if not flags[i, j+k]:
+                    group_sum += amp[i, j+k]
+                    count += 1
+
+            # Only proceed if we have enough unflagged points (at least 30%)
+            min_unflagged = max(1, int(M * 0.3))
+
+            if count >= min_unflagged:
+                # Check if the average exceeds the threshold
+                if (group_sum / count) > avg_threshold:
+                    # Flag samples that exceed the threshold
+                    for k in range(M):
+                        if not flags[i, j+k]:
+                            # Flag more conservatively for low amplitudes
+                            if amp[i, j+k] < avg_threshold * 0.5:
+                                # For very low amplitudes, require higher confidence
+                                if amp[i, j+k] > thresholds[j+k] * 1.2:
+                                    flags[i, j+k] = True
+                            else:
+                                # For normal/high amplitudes, use standard threshold
+                                if amp[i, j+k] > thresholds[j+k]:
+                                    flags[i, j+k] = True
+
+    @cuda.jit
+    def sum_threshold_kernel_freq_channel(amp, flags, thresholds, M):
+        """Improved CUDA kernel for SumThreshold in frequency direction with better flagging logic"""
+        i, j = cuda.grid(2)
+
+        if i < amp.shape[0] - M + 1 and j < amp.shape[1]:
+            # Get threshold for this channel
+            threshold = thresholds[j]
+
+            # Count unflagged points and calculate their sum
+            group_sum = 0.0
+            count = 0
+
+            for k in range(M):
+                if not flags[i+k, j]:
+                    group_sum += amp[i+k, j]
+                    count += 1
+
+            # Only proceed if we have enough unflagged points (at least 30%)
+            min_unflagged = max(1, int(M * 0.3))
+
+            if count >= min_unflagged:
+                # Check if the average exceeds the threshold
+                if (group_sum / count) > threshold:
+                    # Flag samples that exceed the threshold
+                    for k in range(M):
+                        if not flags[i+k, j]:
+                            # Flag more conservatively for low amplitudes
+                            if amp[i+k, j] < threshold * 0.5:
+                                # For very low amplitudes, require higher confidence
+                                if amp[i+k, j] > threshold * 1.2:
+                                    flags[i+k, j] = True
+                            else:
+                                # For normal/high amplitudes, use standard threshold
+                                if amp[i+k, j] > threshold:
+                                    flags[i+k, j] = True
+
+    @cuda.jit
+    def bandpass_normalize_kernel(amp, flags, rfi_threshold):
+        """
+        CUDA kernel to normalize bandpass and flag RFI channels.
+
+        Args:
+            amp: Amplitude array (2D: time × frequency) - modified in-place
+            flags: Boolean array of existing flags (same shape as amp) - modified in-place
+            rfi_threshold: Threshold for RFI detection
+        """
+        # Get channel index
+        channel_idx = cuda.grid(1)
+
+        # Process only valid channels
+        if channel_idx < amp.shape[1]:
+            # Calculate median for this channel
+            values = cuda.local.array(1000, dtype=np.float32)  # Adjust size as needed
+            count = 0
+
+            # Collect unflagged values
+            for t in range(amp.shape[0]):
+                if not flags[t, channel_idx] and count < 1000:
+                    values[count] = amp[t, channel_idx]
+                    count += 1
+
+            # Calculate bandpass (median)
+            bandpass_value = 0.0
+            if count > 0:
+                # Simple sort
+                for i in range(count):
+                    for j in range(i+1, count):
+                        if values[i] > values[j]:
+                            values[i], values[j] = values[j], values[i]
+
+                # Get median
+                if count % 2 == 0:
+                    bandpass_value = (values[count//2-1] + values[count//2]) / 2
+                else:
+                    bandpass_value = values[count//2]
+
+            # Check if channel is RFI-affected by comparing with neighbors
+            is_rfi = False
+            if bandpass_value > 0:
+                # Calculate neighbor statistics (simple approach)
+                neighbor_sum = 0.0
+                neighbor_count = 0
+
+                # Check 3 channels to the left and right
+                for offset in range(-3, 4):
+                    if offset != 0:  # Skip current channel
+                        neighbor_idx = channel_idx + offset
+                        if 0 <= neighbor_idx < amp.shape[1]:
+                            # Get bandpass for this neighbor by sampling a few time points
+                            neighbor_vals = cuda.local.array(10, dtype=np.float32)
+                            n_count = 0
+
+                            # Sample a few time points
+                            for t_step in range(0, amp.shape[0], amp.shape[0]//10 + 1):
+                                if t_step < amp.shape[0] and not flags[t_step, neighbor_idx] and n_count < 10:
+                                    neighbor_vals[n_count] = amp[t_step, neighbor_idx]
+                                    n_count += 1
+
+                            # Get median of samples
+                            if n_count > 0:
+                                # Sort
+                                for i in range(n_count):
+                                    for j in range(i+1, n_count):
+                                        if neighbor_vals[i] > neighbor_vals[j]:
+                                            neighbor_vals[i], neighbor_vals[j] = neighbor_vals[j], neighbor_vals[i]
+
+                                # Add to statistics
+                                if n_count % 2 == 0:
+                                    neighbor_sum += (neighbor_vals[n_count//2-1] + neighbor_vals[n_count//2]) / 2
+                                else:
+                                    neighbor_sum += neighbor_vals[n_count//2]
+                                neighbor_count += 1
+
+                # Check if this channel is an outlier
+                if neighbor_count > 0:
+                    neighbor_avg = neighbor_sum / neighbor_count
+                    if bandpass_value > neighbor_avg * rfi_threshold:
+                        is_rfi = True
+
+                # Normalize or flag
+                for t in range(amp.shape[0]):
+                    if is_rfi:
+                        # Flag RFI channel
+                        flags[t, channel_idx] = True
+                    elif not flags[t, channel_idx]:
+                        # Normalize by bandpass
+                        amp[t, channel_idx] = amp[t, channel_idx] / bandpass_value
 
 def calculate_robust_thresholds(amp, flags, sigma_factor=6.0):
     """Calculate robust thresholds using median and MAD instead of mean and std"""
@@ -357,104 +454,12 @@ def calculate_robust_thresholds(amp, flags, sigma_factor=6.0):
 
 
 
-
-@cuda.jit
-def bandpass_normalize_kernel(amp, flags, rfi_threshold):
-    """
-    CUDA kernel to normalize bandpass and flag RFI channels.
-    
-    Args:
-        amp: Amplitude array (2D: time × frequency) - modified in-place
-        flags: Boolean array of existing flags (same shape as amp) - modified in-place
-        rfi_threshold: Threshold for RFI detection
-    """
-    # Get channel index
-    channel_idx = cuda.grid(1)
-    
-    # Process only valid channels
-    if channel_idx < amp.shape[1]:
-        # Calculate median for this channel
-        values = cuda.local.array(1000, dtype=np.float32)  # Adjust size as needed
-        count = 0
-        
-        # Collect unflagged values
-        for t in range(amp.shape[0]):
-            if not flags[t, channel_idx] and count < 1000:
-                values[count] = amp[t, channel_idx]
-                count += 1
-        
-        # Calculate bandpass (median)
-        bandpass_value = 0.0
-        if count > 0:
-            # Simple sort
-            for i in range(count):
-                for j in range(i+1, count):
-                    if values[i] > values[j]:
-                        values[i], values[j] = values[j], values[i]
-            
-            # Get median
-            if count % 2 == 0:
-                bandpass_value = (values[count//2-1] + values[count//2]) / 2
-            else:
-                bandpass_value = values[count//2]
-        
-        # Check if channel is RFI-affected by comparing with neighbors
-        is_rfi = False
-        if bandpass_value > 0:
-            # Calculate neighbor statistics (simple approach)
-            neighbor_sum = 0.0
-            neighbor_count = 0
-            
-            # Check 3 channels to the left and right
-            for offset in range(-3, 4):
-                if offset != 0:  # Skip current channel
-                    neighbor_idx = channel_idx + offset
-                    if 0 <= neighbor_idx < amp.shape[1]:
-                        # Get bandpass for this neighbor by sampling a few time points
-                        neighbor_vals = cuda.local.array(10, dtype=np.float32)
-                        n_count = 0
-                        
-                        # Sample a few time points
-                        for t_step in range(0, amp.shape[0], amp.shape[0]//10 + 1):
-                            if t_step < amp.shape[0] and not flags[t_step, neighbor_idx] and n_count < 10:
-                                neighbor_vals[n_count] = amp[t_step, neighbor_idx]
-                                n_count += 1
-                        
-                        # Get median of samples
-                        if n_count > 0:
-                            # Sort
-                            for i in range(n_count):
-                                for j in range(i+1, n_count):
-                                    if neighbor_vals[i] > neighbor_vals[j]:
-                                        neighbor_vals[i], neighbor_vals[j] = neighbor_vals[j], neighbor_vals[i]
-                            
-                            # Add to statistics
-                            if n_count % 2 == 0:
-                                neighbor_sum += (neighbor_vals[n_count//2-1] + neighbor_vals[n_count//2]) / 2
-                            else:
-                                neighbor_sum += neighbor_vals[n_count//2]
-                            neighbor_count += 1
-            
-            # Check if this channel is an outlier
-            if neighbor_count > 0:
-                neighbor_avg = neighbor_sum / neighbor_count
-                if bandpass_value > neighbor_avg * rfi_threshold:
-                    is_rfi = True
-            
-            # Normalize or flag
-            for t in range(amp.shape[0]):
-                if is_rfi:
-                    # Flag RFI channel
-                    flags[t, channel_idx] = True
-                elif not flags[t, channel_idx]:
-                    # Normalize by bandpass
-                    amp[t, channel_idx] = amp[t, channel_idx] / bandpass_value
-
-def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigma_factor=6.0, rho=1.5, 
+def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigma_factor=6.0, rho=1.5,
                     diagnostic_plots=False, stream=None, precalculated_thresholds=None):
     """
     SumThreshold implementation with integrated bandpass normalization
-    
+    Now supports both CPU and GPU execution.
+
     Args:
         amp: Amplitude array (2D: time × frequency)
         existing_flags: Boolean array of existing flags (same shape as amp)
@@ -463,18 +468,19 @@ def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigm
         sigma_factor: Multiplier for standard deviation in threshold calculation (not used with precalculated_thresholds)
         rho: Factor to reduce threshold for larger window sizes
         diagnostic_plots: Whether to generate diagnostic plots
-        stream: CUDA stream to use for asynchronous execution
+        stream: CUDA stream to use for asynchronous execution (GPU only)
         precalculated_thresholds: Optional pre-calculated thresholds (if None, calculate after bandpass normalization)
-        
+
     Returns:
         tuple: (flags, baseline_info) where flags is a boolean array of the same shape as amp
     """
-    # Ensure we have a stream for proper synchronization
-    if stream is None:
-        stream = cuda.stream()
-    
-    # Synchronize before starting
-    cuda.synchronize()
+    # Handle stream and synchronization only if GPU is available
+    if GPU_AVAILABLE:
+        # Ensure we have a stream for proper synchronization
+        if stream is None:
+            stream = cuda.stream()
+        # Synchronize before starting
+        cuda.synchronize()
     
     # Print info
     if baseline_info:
@@ -493,34 +499,37 @@ def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigm
     # Create copies of input data for processing
     processed_amp = amp.copy()
     processed_flags = existing_flags.copy()
-    
-    # Copy data to GPU
-    d_amp = cuda.to_device(processed_amp.astype(np.float32), stream=stream)
-    d_flags = cuda.to_device(processed_flags, stream=stream)
-    
+
     # Step 1: Apply bandpass normalization only if thresholds are not pre-calculated
-    # When using batch processing, caller should do bandpass normalization before calculating thresholds
     if precalculated_thresholds is None:
         print("Applying bandpass normalization...")
-        
-        # Launch bandpass normalization kernel (1D grid for channels)
-        threads_per_block_1d = 256
-        blocks_per_grid_1d = (processed_amp.shape[1] + threads_per_block_1d - 1) // threads_per_block_1d
-        
-        # Use a fixed RFI threshold of 1.5 (can be adjusted if needed)
-        bandpass_normalize_kernel[blocks_per_grid_1d, threads_per_block_1d, stream](
-            d_amp, d_flags, 1.5)
-        
-        # Synchronize after normalization
-        stream.synchronize()
-        
-        # Copy back the normalized data to calculate thresholds
-        d_amp.copy_to_host(processed_amp, stream=stream)
-        d_flags.copy_to_host(processed_flags, stream=stream)
-        
-        # Wait for copy to complete
-        stream.synchronize()
-        
+
+        if GPU_AVAILABLE:
+            # GPU path: Copy data to GPU
+            d_amp = cuda.to_device(processed_amp.astype(np.float32), stream=stream)
+            d_flags = cuda.to_device(processed_flags, stream=stream)
+
+            # Launch bandpass normalization kernel (1D grid for channels)
+            threads_per_block_1d = 256
+            blocks_per_grid_1d = (processed_amp.shape[1] + threads_per_block_1d - 1) // threads_per_block_1d
+
+            # Use a fixed RFI threshold of 1.5 (can be adjusted if needed)
+            bandpass_normalize_kernel[blocks_per_grid_1d, threads_per_block_1d, stream](
+                d_amp, d_flags, 1.5)
+
+            # Synchronize after normalization
+            stream.synchronize()
+
+            # Copy back the normalized data to calculate thresholds
+            d_amp.copy_to_host(processed_amp, stream=stream)
+            d_flags.copy_to_host(processed_flags, stream=stream)
+
+            # Wait for copy to complete
+            stream.synchronize()
+        else:
+            # CPU path: Direct normalization
+            bandpass_normalize_cpu(processed_amp, processed_flags, 1.5)
+
         # Calculate thresholds using the normalized data
         print("Calculating robust channel thresholds...")
         channel_thresholds = calculate_robust_thresholds(processed_amp, processed_flags, sigma_factor)
@@ -528,49 +537,66 @@ def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigm
         # Use pre-calculated thresholds (in batch processing mode)
         print("Using pre-calculated thresholds")
         channel_thresholds = precalculated_thresholds
-    
-    # Define thread block and grid dimensions for 2D kernels
-    threads_per_block = (16, 16)
-    blocks_per_grid_x = (processed_amp.shape[0] + threads_per_block[0] - 1) // threads_per_block[0]
-    blocks_per_grid_y = (processed_amp.shape[1] + threads_per_block[1] - 1) // threads_per_block[1]
-    blocks_per_grid = (blocks_per_grid_x, blocks_per_grid_y)
-    
+
     # Process each combination size
     start_time = time.time()
 
-    for M in combinations:
-        # Calculate thresholds for this combination size
-        combo_channel_thresholds = channel_thresholds / (rho ** np.log2(M))
+    if GPU_AVAILABLE:
+        # GPU path: Copy data to GPU if not already there
+        if precalculated_thresholds is not None:
+            d_amp = cuda.to_device(processed_amp.astype(np.float32), stream=stream)
+            d_flags = cuda.to_device(processed_flags, stream=stream)
 
-        print(combo_channel_thresholds)
-        
-        # Copy thresholds to GPU
-        d_thresholds = cuda.to_device(combo_channel_thresholds.astype(np.float32), stream=stream)
-        
-        # Time direction kernel
-        sum_threshold_kernel_time_channel[blocks_per_grid, threads_per_block, stream](
-            d_amp, d_flags, d_thresholds, M)
-        
-        # Synchronize between kernels
+        # Define thread block and grid dimensions for 2D kernels
+        threads_per_block = (16, 16)
+        blocks_per_grid_x = (processed_amp.shape[0] + threads_per_block[0] - 1) // threads_per_block[0]
+        blocks_per_grid_y = (processed_amp.shape[1] + threads_per_block[1] - 1) // threads_per_block[1]
+        blocks_per_grid = (blocks_per_grid_x, blocks_per_grid_y)
+
+        for M in combinations:
+            # Calculate thresholds for this combination size
+            combo_channel_thresholds = channel_thresholds / (rho ** np.log2(M))
+            print(combo_channel_thresholds)
+
+            # Copy thresholds to GPU
+            d_thresholds = cuda.to_device(combo_channel_thresholds.astype(np.float32), stream=stream)
+
+            # Time direction kernel
+            sum_threshold_kernel_time_channel[blocks_per_grid, threads_per_block, stream](
+                d_amp, d_flags, d_thresholds, M)
+
+            # Synchronize between kernels
+            stream.synchronize()
+
+            # Frequency direction kernel
+            sum_threshold_kernel_freq_channel[blocks_per_grid, threads_per_block, stream](
+                d_amp, d_flags, d_thresholds, M)
+
+            # Synchronize between iterations
+            stream.synchronize()
+
+        # Final synchronization
         stream.synchronize()
-        
-        # Frequency direction kernel
-        sum_threshold_kernel_freq_channel[blocks_per_grid, threads_per_block, stream](
-            d_amp, d_flags, d_thresholds, M)
-        
-        # Synchronize between iterations
+        cuda.synchronize()
+
+        # Copy results back to host
+        d_flags.copy_to_host(processed_flags, stream=stream)
+
+        # Final synchronization
         stream.synchronize()
-    
-    # Final synchronization
-    stream.synchronize()
-    cuda.synchronize()
-    
-    # Copy results back to host
-    d_flags.copy_to_host(processed_flags, stream=stream)
-    
-    # Final synchronization
-    stream.synchronize()
-    cuda.synchronize()
+        cuda.synchronize()
+    else:
+        # CPU path: Process directly on CPU
+        for M in combinations:
+            # Calculate thresholds for this combination size
+            combo_channel_thresholds = channel_thresholds / (rho ** np.log2(M))
+            print(combo_channel_thresholds)
+
+            # Time direction processing
+            sum_threshold_cpu_time_channel(processed_amp, processed_flags, combo_channel_thresholds, M)
+
+            # Frequency direction processing
+            sum_threshold_cpu_freq_channel(processed_amp, processed_flags, combo_channel_thresholds, M)
     
     # Process results and generate statistics
     processing_time = time.time() - start_time
@@ -784,9 +810,12 @@ def process_baselines_batch_gpu(baseline_data, field_id, corr_to_process, option
     """
     total_start_time = time.time()
     
-    # Create a main CUDA stream
-    main_stream = cuda.stream()
-    cuda.synchronize()  # Synchronize before starting
+    # Create a main CUDA stream if GPU available
+    if GPU_AVAILABLE:
+        main_stream = cuda.stream()
+        cuda.synchronize()  # Synchronize before starting
+    else:
+        main_stream = None
     
     # Extract baselines to process
     baselines = list(baseline_data.keys())
@@ -961,8 +990,12 @@ def process_baselines_batch_gpu(baseline_data, field_id, corr_to_process, option
     
     # Process each baseline/correlation with dedicated CUDA streams
     # Use a pool of streams for parallel execution
-    num_streams = min(5, len(threshold_arrays))  # Limit number of streams
-    streams = [cuda.stream() for _ in range(num_streams)]
+    if GPU_AVAILABLE:
+        num_streams = min(5, len(threshold_arrays))  # Limit number of streams
+        streams = [cuda.stream() for _ in range(num_streams)]
+    else:
+        num_streams = 1
+        streams = [None]
     
     # Distribute work among streams
     stream_idx = 0
@@ -1062,11 +1095,11 @@ def process_baselines_batch_gpu(baseline_data, field_id, corr_to_process, option
         stream_idx = (stream_idx + 1) % num_streams
     
     # Synchronize all streams
-    for stream in streams:
-        stream.synchronize()
-    
-    # Final synchronization
-    cuda.synchronize()
+    if GPU_AVAILABLE:
+        for stream in streams:
+            stream.synchronize()
+        # Final synchronization
+        cuda.synchronize()
 
     # Generate diagnostic plots after processing
     if options['diagnostic_plots'] and diagnostic_data:
@@ -1201,12 +1234,12 @@ def process_baseline_async(bl_data, bl, field_id, corr_to_process, options, freq
     # Store diagnostic data
     diagnostic_data = []
     
-    # Create a stream if not provided
-    if stream is None:
-        stream = cuda.stream()
-    
-    # Synchronize to ensure clean GPU state
-    cuda.synchronize()
+    # Create a stream if not provided and GPU is available
+    if GPU_AVAILABLE:
+        if stream is None:
+            stream = cuda.stream()
+        # Synchronize to ensure clean GPU state
+        cuda.synchronize()
     
     if len(corr_to_process) == 1:
         # Process a single correlation
@@ -1397,9 +1430,10 @@ def process_baseline_async(bl_data, bl, field_id, corr_to_process, options, freq
             )
     
     # Ensure synchronization before returning
-    if stream:
-        stream.synchronize()
-    cuda.synchronize()
+    if GPU_AVAILABLE:
+        if stream:
+            stream.synchronize()
+        cuda.synchronize()
     
     return combined_flags, existing_flag_count, new_flag_count
 
@@ -1753,7 +1787,8 @@ def hunt_ms(ms_file, options):
                     gc.collect()
                     
                     # Ensure GPU is cleared
-                    cuda.synchronize()
+                    if GPU_AVAILABLE:
+                        cuda.synchronize()
             else:
                 # Single baseline processing
                 raise ValueError("Forcing single baseline processing")
@@ -1810,8 +1845,8 @@ def hunt_ms(ms_file, options):
                     )
                     
                     # Process this baseline
-                    # Create a dedicated stream
-                    stream = cuda.stream()
+                    # Create a dedicated stream (if GPU available)
+                    stream = cuda.stream() if GPU_AVAILABLE else None
                     
                     # Process baseline
                     all_flags, baseline_existing, baseline_new = process_baseline_async(
@@ -1890,7 +1925,8 @@ def hunt_ms(ms_file, options):
                     gc.collect()
                     
                     # Ensure GPU is clear
-                    cuda.synchronize()
+                    if GPU_AVAILABLE:
+                        cuda.synchronize()
                     
                 except Exception as e:
                     print(f"Error processing baseline {bl}: {str(e)}")

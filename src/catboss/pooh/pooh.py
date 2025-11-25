@@ -15,9 +15,9 @@ import dask
 import psutil
 import concurrent.futures
 
-# Check GPU availability
+# Check GPU availability and import Numba
 try:
-    from numba import cuda
+    from numba import cuda, jit
     GPU_AVAILABLE = cuda.is_available()
     if GPU_AVAILABLE:
         print("GPU detected - will use GPU acceleration")
@@ -25,6 +25,7 @@ try:
         print("No GPU detected - will use CPU processing")
 except Exception as e:
     print(f"GPU check failed: {e} - will use CPU processing")
+    from numba import jit
     GPU_AVAILABLE = False
     cuda = None
 
@@ -128,8 +129,9 @@ def print_gpu_info():
     print("============================")
 
 # ==================== CPU IMPLEMENTATIONS ====================
+@jit(nopython=True)
 def sum_threshold_cpu_time_channel(amp, flags, thresholds, M):
-    """CPU implementation of SumThreshold in time direction"""
+    """CPU implementation of SumThreshold in time direction (JIT-compiled for speed)"""
     for i in range(amp.shape[0]):
         for j in range(amp.shape[1] - M + 1):
             # Calculate average threshold for this group
@@ -162,8 +164,9 @@ def sum_threshold_cpu_time_channel(amp, flags, thresholds, M):
                                 if amp[i, j+k] > thresholds[j+k]:
                                     flags[i, j+k] = True
 
+@jit(nopython=True)
 def sum_threshold_cpu_freq_channel(amp, flags, thresholds, M):
-    """CPU implementation of SumThreshold in frequency direction"""
+    """CPU implementation of SumThreshold in frequency direction (JIT-compiled for speed)"""
     for i in range(amp.shape[0] - M + 1):
         for j in range(amp.shape[1]):
             # Get threshold for this channel
@@ -196,8 +199,9 @@ def sum_threshold_cpu_freq_channel(amp, flags, thresholds, M):
                                 if amp[i+k, j] > threshold:
                                     flags[i+k, j] = True
 
+@jit
 def bandpass_normalize_cpu(amp, flags, rfi_threshold):
-    """CPU implementation of bandpass normalization"""
+    """CPU implementation of bandpass normalization (JIT-compiled, uses numpy mode)"""
     for channel_idx in range(amp.shape[1]):
         # Calculate median for this channel
         unflagged_data = amp[~flags[:, channel_idx], channel_idx]

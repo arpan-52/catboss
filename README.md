@@ -175,21 +175,6 @@ print(f"New flags: {results['new_percent_flagged']:.2f}%")
 | `max_memory_usage` | float | `0.8` | Fraction of memory to use |
 | `verbose` | bool | `False` | Verbose output |
 
-### Window Size Strategy
-
-| Size | Target | Example |
-|------|--------|---------|
-| 1 | Point sources | Lightning, satellites |
-| 2-4 | Short bursts | Aircraft radar |
-| 8-16 | Moderate RFI | Digital TV, phones |
-| 32-64 | Broadband | FM radio |
-| 128+ | Very broad | Entire subbands |
-
-**Presets:**
-- Fast: `[1, 2, 4, 8]`
-- Standard: `[1, 2, 4, 8, 16, 32, 64]`
-- Thorough: `[1, 2, 4, 8, 16, 32, 64, 128]`
-
 ---
 
 ## Algorithm
@@ -210,14 +195,14 @@ print(f"New flags: {results['new_percent_flagged']:.2f}%")
 
 3. Multi-Scale SumThreshold
    For each window size M:
-     - Slide window in time direction
-     - Slide window in frequency direction
+     - Slide window in time direction (skip already flagged points)
+     - Slide window in frequency direction (skip already flagged points)
      - Flag outliers exceeding adaptive threshold
 
 4. Flag Combination
-   - Combine flags from all scales (OR)
-   - Preserve existing flags
-   - Write to MS if requested
+   - Simple OR: final_flags = existing_flags | new_flags
+   - Existing flags always preserved
+   - Write combined flags to MS if requested
 ```
 
 ### Threshold Scaling
@@ -281,50 +266,6 @@ options['diagnostic_plots'] = False  # Disable plots
 options['combinations'] = [1, 2, 4, 8]  # Fast mode
 options['corr_to_process'] = [0]  # Single correlation
 options['max_threads'] = 64  # More threads (CPU)
-```
-
----
-
-## Examples
-
-### Conservative Flagging
-```bash
-catboss --cat pooh obs.ms \
-  --combinations 1,2,4,8,16 \
-  --sigma 6.0 \
-  --apply-flags \
-  --verbose
-```
-
-### Aggressive Flagging
-```bash
-catboss --cat pooh rfi_heavy.ms \
-  --combinations 1,2,4,8,16,32,64 \
-  --sigma 4.0 \
-  --rho 1.3 \
-  --poly-degree 7 \
-  --deviation-threshold 2.5 \
-  --apply-flags \
-  --diagnostic-plots \
-  --output-dir aggressive_flags
-```
-
-### Research Mode
-```python
-from catboss.pooh.pooh import hunt_ms
-
-options = {
-    'combinations': [1, 2, 4, 8, 16, 32, 64, 128],
-    'sigma_factor': 5.0,
-    'corr_to_process': [0, 1, 2, 3],
-    'apply_flags': False,  # Don't modify MS
-    'diagnostic_plots': True,
-    'output_dir': 'research',
-    'verbose': True
-}
-
-results = hunt_ms('test.ms', options)
-# Review plots before applying
 ```
 
 ---

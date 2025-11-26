@@ -15,7 +15,7 @@ def load_config(config_path):
 def main():
     # Main parser
     parser = argparse.ArgumentParser(
-        description="CATBOSS: Radio Astronomy RFI Flagging Suite",
+        description="CATBOSS - Radio Astronomy RFI Flagging Suite",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

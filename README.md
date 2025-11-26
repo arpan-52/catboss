@@ -1,6 +1,6 @@
 # CATBOSS - Radio Astronomy RFI Flagging Suite
 
-**CATBOSS** (Comprehensive Astronomical Tools for Baseband Observation Signal Scanning) is a Python-based RFI flagging suite for radio astronomy Measurement Set data.
+**CATBOSS** is a Python-based RFI flagging suite for radio astronomy Measurement Set data.
 
 ## POOH: Parallelized Optimized Outlier Hunter
 

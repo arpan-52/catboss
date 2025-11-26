@@ -252,22 +252,6 @@ When `diagnostic_plots=True`, generates PNG files:
 | CPU (Numba JIT) | Fast | 10-100× faster than pure Python |
 | CPU (Pure Python) | Slow | Not recommended |
 
-### Optimization
-
-**Memory errors:**
-```python
-options['max_memory_usage'] = 0.6  # Reduce from 0.8
-options['combinations'] = [1, 2, 4, 8]  # Fewer windows
-options['diagnostic_plots'] = False  # Disable plots
-```
-
-**Speed up processing:**
-```python
-options['combinations'] = [1, 2, 4, 8]  # Fast mode
-options['corr_to_process'] = [0]  # Single correlation
-options['max_threads'] = 64  # More threads (CPU)
-```
-
 ---
 
 ## Troubleshooting

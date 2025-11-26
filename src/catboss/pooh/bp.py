@@ -259,10 +259,10 @@ if GPU_AVAILABLE:
 
 def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigma_factor=6.0, rho=1.5, diagnostic_plots=False, stream=None, precalculated_thresholds=None):
     """
-    The flagger is implemented to run on a single baseline dynamic spectra.
+    SumThreshold implementation with CPU/GPU support.
     Now supports respecting existing flags by treating flagged data points specially
     in the summing process.
-    
+
     Args:
         amp: Amplitude array (2D: time × frequency)
         existing_flags: Boolean array of existing flags (same shape as amp)
@@ -271,18 +271,19 @@ def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigm
         sigma_factor: Multiplier for channel-based standard deviation in threshold calculation
         rho: Factor to reduce threshold for larger window sizes
         diagnostic_plots: Whether to generate diagnostic plots
-        stream: CUDA stream to use for asynchronous execution
+        stream: CUDA stream to use for asynchronous execution (GPU only)
         precalculated_thresholds: Optional pre-calculated threshold array
-        
+
     Returns:
         tuple: (flags, baseline_info) where flags is a boolean array of the same shape as amp
     """
-    
-    if stream is None:
-        stream = cuda.stream()
-    
+
+    # Handle stream only if GPU is available
+    if GPU_AVAILABLE:
+        if stream is None:
+            stream = cuda.stream()
+
     print(f"Starting the scratches on the {baseline_info}")
-    # print(f"Data shape: {amp.shape}")
 
     # Set default combinations if not provided
     if combinations is None:
@@ -290,7 +291,7 @@ def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigm
 
     if rho is None:
         rho = 1.5
-    
+
     print(f"Using the combinations: {combinations}")
     print(f"Using the rho value: {rho}")
 
@@ -309,7 +310,7 @@ def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigm
             channel_data = amp[:, j]
             mask = existing_flags[:, j]
             unflagged_data = channel_data[~mask]
-            
+
             if len(unflagged_data) > 0:
                 # Calculate statistics only on unflagged data
                 channel_medians[j] = np.median(unflagged_data)
@@ -325,60 +326,72 @@ def sumthreshold_gpu(amp, existing_flags, baseline_info, combinations=None, sigm
                     # If everything is flagged, use reasonable defaults
                     channel_medians[j] = 0.0
                     channel_stds[j] = 1.0
-        
+
         channel_thresholds = channel_medians + sigma_factor * channel_stds
-    
+
     print(f"Channel thresholds - min: {np.min(channel_thresholds):.4f}, max: {np.max(channel_thresholds):.4f}")
 
     # Initialize flags with existing flags
     flags = existing_flags.copy()
-    
-    # Copy data and flags to GPU with specified stream
-    d_data = cuda.to_device(amp, stream=stream)
-    d_flags = cuda.to_device(flags, stream=stream)
 
-    # print("Data copied to GPU, yayyy! Being serious now (*_*)")
-    
-    # Define thread block and grid dimensions
-    threads_per_block = (16, 16)
-    blocks_per_grid_x = (amp.shape[0] + threads_per_block[0] - 1) // threads_per_block[0]
-    blocks_per_grid_y = (amp.shape[1] + threads_per_block[1] - 1) // threads_per_block[1]
-    blocks_per_grid = (blocks_per_grid_x, blocks_per_grid_y)
-    
     # Process each combination size
-    # print("Running SumThreshold with channel-based thresholds on GPU...")
     start_time = time.time()
 
-    for M in combinations:
-        # Calculate thresholds for this combination size
-        combo_channel_thresholds = channel_thresholds / (rho ** np.log2(M))
-        
-        print(f"Processing combination size {M}, avg threshold: {np.mean(combo_channel_thresholds):.4f}")
-        
-        # Copy thresholds to GPU using the specified stream
-        d_thresholds = cuda.to_device(combo_channel_thresholds, stream=stream)
-        
-        # Time direction
-        sum_threshold_kernel_time_channel[blocks_per_grid, threads_per_block, stream](
-            d_data, d_flags, d_thresholds, M)
-        
-        # Frequency direction
-        sum_threshold_kernel_freq_channel[blocks_per_grid, threads_per_block, stream](
-            d_data, d_flags, d_thresholds, M)
-    
-    # Copy results back to host using the specified stream
-    d_flags.copy_to_host(flags, stream=stream)
-    
+    if GPU_AVAILABLE:
+        # GPU path
+        # Copy data and flags to GPU with specified stream
+        d_data = cuda.to_device(amp, stream=stream)
+        d_flags = cuda.to_device(flags, stream=stream)
+
+        # Define thread block and grid dimensions
+        threads_per_block = (16, 16)
+        blocks_per_grid_x = (amp.shape[0] + threads_per_block[0] - 1) // threads_per_block[0]
+        blocks_per_grid_y = (amp.shape[1] + threads_per_block[1] - 1) // threads_per_block[1]
+        blocks_per_grid = (blocks_per_grid_x, blocks_per_grid_y)
+
+        for M in combinations:
+            # Calculate thresholds for this combination size
+            combo_channel_thresholds = channel_thresholds / (rho ** np.log2(M))
+
+            print(f"Processing combination size {M}, avg threshold: {np.mean(combo_channel_thresholds):.4f}")
+
+            # Copy thresholds to GPU using the specified stream
+            d_thresholds = cuda.to_device(combo_channel_thresholds, stream=stream)
+
+            # Time direction
+            sum_threshold_kernel_time_channel[blocks_per_grid, threads_per_block, stream](
+                d_data, d_flags, d_thresholds, M)
+
+            # Frequency direction
+            sum_threshold_kernel_freq_channel[blocks_per_grid, threads_per_block, stream](
+                d_data, d_flags, d_thresholds, M)
+
+        # Copy results back to host using the specified stream
+        d_flags.copy_to_host(flags, stream=stream)
+    else:
+        # CPU path
+        for M in combinations:
+            # Calculate thresholds for this combination size
+            combo_channel_thresholds = channel_thresholds / (rho ** np.log2(M))
+
+            print(f"Processing combination size {M}, avg threshold: {np.mean(combo_channel_thresholds):.4f}")
+
+            # Time direction processing
+            sum_threshold_cpu_time_channel(amp, flags, combo_channel_thresholds, M)
+
+            # Frequency direction processing
+            sum_threshold_cpu_freq_channel(amp, flags, combo_channel_thresholds, M)
+
     # Process results and generate statistics
     processing_time = time.time() - start_time
     print(f"Processing completed in {processing_time:.4f} seconds")
-    
+
     # Calculate percentage of newly flagged data (excluding existing flags)
     existing_count = np.sum(existing_flags)
     total_count = flags.size
     new_flags_count = np.sum(flags) - existing_count
     percent_new_flagged = 100 * new_flags_count / (total_count - existing_count) if (total_count - existing_count) > 0 else 0
-    
+
     print(f"Found {new_flags_count} new flags ({percent_new_flagged:.2f}% of unflagged data) for the baseline {baseline_info}")
 
     return flags, baseline_info
@@ -970,44 +983,48 @@ def hunt_ms(ms_file, options):
                     # If we need to chunk this baseline
                     if chunk_factor > 1:
                         chunk_flags = []
-                        # Create streams for parallel chunk processing
-                        chunk_streams = [cuda.stream() for _ in range(chunk_factor)]
+                        # Create streams for parallel chunk processing (GPU only)
+                        if GPU_AVAILABLE:
+                            chunk_streams = [cuda.stream() for _ in range(chunk_factor)]
+                        else:
+                            chunk_streams = [None for _ in range(chunk_factor)]
                         chunk_results = []
                         chunk_infos = []
-                        
+
                         # Launch all chunk processing in parallel
                         for chunk, stream in enumerate(chunk_streams):
                             start_idx = chunk * chunk_size
                             end_idx = min((chunk + 1) * chunk_size, time_samples)
-                            
+
                             if options['verbose']:
                                 print(f"Processing chunk {chunk+1}/{chunk_factor}: rows {start_idx}-{end_idx}")
-                            
+
                             # Extract chunk of data
                             chunk_data = bl_data[start_idx:end_idx]
                             chunk_flags = bl_flags[start_idx:end_idx]
-                            
+
                             # Create chunk data object
                             chunk_obj = MaterializedData(
                                 chunk_data,
                                 chunk_flags,
                                 end_idx - start_idx
                             )
-                            
+
                             # Process this chunk asynchronously
                             chunk_info = f"chunk {chunk+1}/{chunk_factor}"
                             chunk_infos.append((start_idx, end_idx, chunk_info))
-                            
+
                             result = process_baseline_async(
-                                chunk_obj, bl, field_id, corr_to_process, options, 
-                                freq_axis, total_flagged, total_visibilities, 
+                                chunk_obj, bl, field_id, corr_to_process, options,
+                                freq_axis, total_flagged, total_visibilities,
                                 stream, chunk_info=chunk_info,
                                 output_dir=options.get('output_dir', 'outputs')
                             )
                             chunk_results.append(result)
-                        
-                        # Wait for all chunks to complete
-                        cuda.synchronize()
+
+                        # Wait for all chunks to complete (GPU only)
+                        if GPU_AVAILABLE:
+                            cuda.synchronize()
                         
                         # Process results
                         all_chunk_flags = None
@@ -1509,9 +1526,12 @@ def process_baselines_batch_gpu(baseline_data, field_id, corr_to_process, option
         for k in sample_keys:
             print(f"  Key: {k}, Type: {type(k)}")
     
-    # Now process all baselines with a single GPU allocation
-    # Create a CUDA stream
-    stream = cuda.stream()
+    # Now process all baselines with a single GPU allocation (if available)
+    # Create a CUDA stream (GPU only)
+    if GPU_AVAILABLE:
+        stream = cuda.stream()
+    else:
+        stream = None
     
     # Process each baseline/correlation with the pre-calculated thresholds
     for key, threshold_data in threshold_arrays.items():

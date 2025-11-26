@@ -60,22 +60,65 @@ python -c "from numba import cuda; print(f'GPU: {cuda.is_available()}')"
 
 ## Usage
 
+### Getting Help
+
+```bash
+# General help
+catboss -h
+
+# POOH-specific help with all options
+catboss --cat pooh -h
+```
+
 ### Command Line
 
 ```bash
 # Basic usage
-catboss pooh data.ms --apply-flags
+catboss --cat pooh data.ms --apply-flags
 
 # Full options
-catboss pooh data.ms \
+catboss --cat pooh data.ms \
   --combinations 1,2,4,8,16,32,64 \
   --sigma 6.0 \
   --rho 1.5 \
+  --poly-degree 5 \
+  --deviation-threshold 3.0 \
   --polarizations 0,3 \
   --apply-flags \
   --diagnostic-plots \
   --output-dir rfi_plots \
+  --max-threads 32 \
+  --max-memory-usage 0.8 \
   --verbose
+
+# Using config file
+catboss --cat pooh data.ms --config config.json
+```
+
+### Configuration File
+
+Create `config.json`:
+
+```json
+{
+  "combinations": [1, 2, 4, 8, 16, 32, 64],
+  "sigma_factor": 6.0,
+  "rho": 1.5,
+  "poly_degree": 5,
+  "deviation_threshold": 3.0,
+  "corr_to_process": [0, 3],
+  "apply_flags": true,
+  "diagnostic_plots": true,
+  "output_dir": "rfi_plots",
+  "max_threads": 32,
+  "max_memory_usage": 0.8,
+  "verbose": true
+}
+```
+
+Then run:
+```bash
+catboss --cat pooh data.ms --config config.json
 ```
 
 ### Python API
@@ -246,7 +289,7 @@ options['max_threads'] = 64  # More threads (CPU)
 
 ### Conservative Flagging
 ```bash
-catboss pooh obs.ms \
+catboss --cat pooh obs.ms \
   --combinations 1,2,4,8,16 \
   --sigma 6.0 \
   --apply-flags \
@@ -255,10 +298,12 @@ catboss pooh obs.ms \
 
 ### Aggressive Flagging
 ```bash
-catboss pooh rfi_heavy.ms \
+catboss --cat pooh rfi_heavy.ms \
   --combinations 1,2,4,8,16,32,64 \
   --sigma 4.0 \
   --rho 1.3 \
+  --poly-degree 7 \
+  --deviation-threshold 2.5 \
   --apply-flags \
   --diagnostic-plots \
   --output-dir aggressive_flags

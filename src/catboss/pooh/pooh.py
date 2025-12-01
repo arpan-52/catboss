@@ -1446,7 +1446,7 @@ def generate_diagnostic_plot(
         plt.xlabel("Frequency")
         plt.ylabel("Time")
 
-        # Right panel: Flagged spectra with all flags in white
+        # Right panel: Flagged spectra with existing vs new flags
         plt.subplot(1, 2, 2)
 
         # Plot the original data first
@@ -1460,35 +1460,50 @@ def generate_diagnostic_plot(
             vmax=vmax,
         )
 
-        # Create a white mask for all flags
+        # Subsample existing flags
+        existing_flags_plot = existing_flags[::time_skip, ::freq_skip]
+
+        # Calculate new flags (combined - existing)
+        new_flags_plot = combined_flags_plot & ~existing_flags_plot
+
+        # Create flag overlay with different colors
         flag_img = np.zeros(vis_amp_plot.shape + (4,), dtype=np.float32)  # RGBA
 
-        # Set all flags to white (1, 1, 1)
-        flag_img[combined_flags_plot, 0] = 1.0  # R
-        flag_img[combined_flags_plot, 1] = 1.0  # G
-        flag_img[combined_flags_plot, 2] = 1.0  # B
-        flag_img[combined_flags_plot, 3] = 1.0  # Alpha (fully opaque)
+        # Existing flags in RED
+        flag_img[existing_flags_plot, 0] = 1.0  # R
+        flag_img[existing_flags_plot, 1] = 0.0  # G
+        flag_img[existing_flags_plot, 2] = 0.0  # B
+        flag_img[existing_flags_plot, 3] = 0.8  # Alpha
 
-        # Overlay the white flags
+        # New POOH flags in CYAN
+        flag_img[new_flags_plot, 0] = 0.0  # R
+        flag_img[new_flags_plot, 1] = 1.0  # G
+        flag_img[new_flags_plot, 2] = 1.0  # B
+        flag_img[new_flags_plot, 3] = 0.8  # Alpha
+
+        # Overlay the flags
         plt.imshow(flag_img, aspect="auto", origin="lower", interpolation="nearest")
 
         plt.colorbar(label="Amplitude", shrink=0.8)
-        plt.title("Flagged Dynamic Spectra")
+        plt.title("RFI Flags: Existing vs POOH Detected")
         plt.xlabel("Frequency")
         plt.ylabel("Time")
 
-        # Add simple legend
+        # Add legend
         import matplotlib.patches as mpatches
 
-        white_patch = mpatches.Patch(color="white", label="Flags")
-        plt.legend(handles=[white_patch], loc="upper right")
+        red_patch = mpatches.Patch(color="red", label="Existing Flags")
+        cyan_patch = mpatches.Patch(color="cyan", label="POOH Detected")
+        plt.legend(handles=[red_patch, cyan_patch], loc="upper right")
 
-        # Add percentage info for total flags only
+        # Calculate percentages
+        percent_existing = 100 * np.sum(existing_flags_plot) / existing_flags_plot.size
+        percent_new = 100 * np.sum(new_flags_plot) / new_flags_plot.size
         percent_total = 100 * np.sum(combined_flags_plot) / combined_flags_plot.size
 
         plt.suptitle(
             f"BL {bl[0]}-{bl[1]}, Pol {corr_str}, Field {field_id}\n"
-            f"Total flags: {percent_total:.1f}%"
+            f"Existing: {percent_existing:.1f}% | POOH: {percent_new:.1f}% | Total: {percent_total:.1f}%"
         )
 
         plt.tight_layout()
@@ -2383,19 +2398,10 @@ def hunt_ms(ms_file, options):
         ms_file, field_ids, system_usable_mem
     )
 
-    if parallel_fields > 1 and len(field_ids) > 1:
-        print(
-            f"💡 NOTE: You have enough RAM to potentially process {parallel_fields} fields in parallel."
-        )
-        print(
-            "   Currently processing sequentially with optimized Numba parallelization within each field.\n"
-        )
-
-    # Process each field
     # FIELD-LEVEL PARALLELIZATION
     if parallel_fields > 1 and len(field_ids) > 1:
-        print(f"\n🚀 PARALLEL MODE: Processing {parallel_fields} fields at a time!")
-        print(f"   Using {parallel_fields} parallel processes\n")
+        print(f"\n[PARALLEL MODE] Processing {parallel_fields} fields simultaneously")
+        print(f"[PARALLEL MODE] Worker processes: {parallel_fields}\n")
 
         from multiprocessing import Pool
 
@@ -2424,7 +2430,7 @@ def hunt_ms(ms_file, options):
                 baselines_processed += stats["baselines_processed"]
                 baselines_skipped += stats["baselines_skipped"]
     else:
-        print(f"\n⚙️  SEQUENTIAL MODE: Processing {len(field_ids)} field(s)\n")
+        print(f"\n[SEQUENTIAL MODE] Processing {len(field_ids)} field(s)\n")
         for field_id in field_ids:
             stats = process_single_field(
                 ms_file, field_id, options, freq_axis, gpu_usable_mem, system_usable_mem

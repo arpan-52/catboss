@@ -1,5 +1,5 @@
 # CATBOSS - Radio Astronomy RFI Flagging Suite
-<img width="962" height="1024" alt="image" src="https://github.com/user-attachments/assets/b185954c-be47-4acc-9593-0c47f720f93b" />
+<img width="990" height="744" alt="Gemini_Generated_Image_wc9j9twc9j9twc9j" src="https://github.com/user-attachments/assets/5a4af262-44f2-4f21-b54d-907a1f5be0e6" />
 
 **CATBOSS** is a Python-based RFI flagging suite for radio astronomy Measurement Set data.
 

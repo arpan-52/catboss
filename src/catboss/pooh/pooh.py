@@ -1045,8 +1045,6 @@ def normalize_bandpass_with_polynomial_fit(
     return smooth_bandpass, rfi_mask, smooth_valid
 
 
-
-
 def process_baselines_batch_gpu(
     baseline_data, field_id, corr_to_process, options, freq_axis
 ):
@@ -1938,13 +1936,7 @@ def process_single_field(
                         bl = (a1, a2)
 
                         if bl not in batch:
-                            return {
-                                "total_flagged": total_flagged,
-                                "total_new_flags": total_new_flags,
-                                "total_visibilities": total_visibilities,
-                                "baselines_processed": baselines_processed,
-                                "baselines_skipped": baselines_skipped,
-                            }
+                            continue
 
                         if bl not in baseline_data:
                             baseline_data[bl] = {"data": [], "flags": [], "indices": []}
@@ -1961,13 +1953,7 @@ def process_single_field(
                         if options["verbose"]:
                             print(f"No data found for baseline {bl}. Skipping.")
                         baselines_skipped += 1
-                        return {
-                            "total_flagged": total_flagged,
-                            "total_new_flags": total_new_flags,
-                            "total_visibilities": total_visibilities,
-                            "baselines_processed": baselines_processed,
-                            "baselines_skipped": baselines_skipped,
-                        }
+                        continue
 
                     # Combine data
                     bl_data = np.array(baseline_data[bl]["data"])
@@ -1978,13 +1964,7 @@ def process_single_field(
                         if options["verbose"]:
                             print(f"Baseline {bl} is completely flagged. Skipping.")
                         baselines_skipped += 1
-                        return {
-                            "total_flagged": total_flagged,
-                            "total_new_flags": total_new_flags,
-                            "total_visibilities": total_visibilities,
-                            "baselines_processed": baselines_processed,
-                            "baselines_skipped": baselines_skipped,
-                        }
+                        continue
 
                     # Create data object
                     class MaterializedData:
@@ -2035,13 +2015,8 @@ def process_single_field(
                                 import traceback
 
                                 traceback.print_exc()
-                            return {
-                                "total_flagged": total_flagged,
-                                "total_new_flags": total_new_flags,
-                                "total_visibilities": total_visibilities,
-                                "baselines_processed": baselines_processed,
-                                "baselines_skipped": baselines_skipped,
-                            }
+                            baselines_skipped += 1
+                            continue
 
                 # Write flags if requested
                 if options["apply_flags"]:
@@ -2062,13 +2037,7 @@ def process_single_field(
 
                             if not orig_ds_list or orig_ds_list[0].sizes["row"] == 0:
                                 print(f"No data found for baseline {bl}. Skipping.")
-                                return {
-                                    "total_flagged": total_flagged,
-                                    "total_new_flags": total_new_flags,
-                                    "total_visibilities": total_visibilities,
-                                    "baselines_processed": baselines_processed,
-                                    "baselines_skipped": baselines_skipped,
-                                }
+                                continue
 
                             # Get original dataset and flags
                             orig_ds = orig_ds_list[0]
@@ -2183,13 +2152,7 @@ def process_single_field(
                     if options["verbose"]:
                         print(f"No data found for baseline {bl}. Skipping.")
                     baselines_skipped += 1
-                    return {
-                        "total_flagged": total_flagged,
-                        "total_new_flags": total_new_flags,
-                        "total_visibilities": total_visibilities,
-                        "baselines_processed": baselines_processed,
-                        "baselines_skipped": baselines_skipped,
-                    }
+                    continue
 
                 # Get data
                 bl_data, bl_flags = dask.compute(
@@ -2201,13 +2164,7 @@ def process_single_field(
                     if options["verbose"]:
                         print(f"Baseline {bl} is completely flagged. Skipping.")
                     baselines_skipped += 1
-                    return {
-                        "total_flagged": total_flagged,
-                        "total_new_flags": total_new_flags,
-                        "total_visibilities": total_visibilities,
-                        "baselines_processed": baselines_processed,
-                        "baselines_skipped": baselines_skipped,
-                    }
+                    continue
 
                 # Create data object
                 class MaterializedData:
@@ -2329,13 +2286,8 @@ def process_single_field(
                     import traceback
 
                     traceback.print_exc()
-                return {
-                    "total_flagged": total_flagged,
-                    "total_new_flags": total_new_flags,
-                    "total_visibilities": total_visibilities,
-                    "baselines_processed": baselines_processed,
-                    "baselines_skipped": baselines_skipped,
-                }
+                baselines_skipped += 1
+                continue
 
     # Return field statistics
     return {

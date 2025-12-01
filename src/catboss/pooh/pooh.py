@@ -1884,6 +1884,82 @@ def process_single_field(
         f"Typical baseline has {time_samples} time samples × {freq_channels} frequency channels"
     )
 
+    # PRE-FILTER: Check which baselines are completely flagged (load only FLAG, not DATA)
+    print(f"\n[PRE-FILTER] Checking flag status for {len(baselines)} baselines...")
+    valid_baselines = []
+    baseline_flag_map = {}  # Map baseline -> is_completely_flagged
+
+    # Build query for all baselines at once
+    baseline_clauses = []
+    for ant1, ant2 in baselines:
+        baseline_clauses.append(f"(ANTENNA1={ant1} AND ANTENNA2={ant2})")
+
+    taql_where_all = f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
+
+    try:
+        # Read only FLAG column for all baselines (lightweight)
+        flag_ds_list = xds_from_ms(
+            ms_file,
+            columns=("FLAG", "ANTENNA1", "ANTENNA2"),
+            taql_where=taql_where_all,
+            chunks={"row": 50000},
+        )
+
+        # Check each baseline
+        for ds in flag_ds_list:
+            ant1, ant2, flags = dask.compute(
+                ds.ANTENNA1.data, ds.ANTENNA2.data, ds.FLAG.data
+            )
+
+            # Group by baseline
+            baseline_flags = {}
+            for i, (a1, a2) in enumerate(zip(ant1, ant2)):
+                bl = (a1, a2)
+                if bl not in baseline_flags:
+                    baseline_flags[bl] = []
+                baseline_flags[bl].append(flags[i])
+
+            # Check if completely flagged
+            for bl, flag_list in baseline_flags.items():
+                combined_flags = np.concatenate(flag_list, axis=0)
+                is_completely_flagged = np.all(combined_flags)
+                baseline_flag_map[bl] = is_completely_flagged
+
+                if is_completely_flagged:
+                    if options["verbose"]:
+                        print(f"  Baseline {bl}: 100% flagged - SKIP")
+                    baselines_skipped += 1
+                else:
+                    if options["verbose"]:
+                        percent_flagged = (
+                            100 * np.sum(combined_flags) / combined_flags.size
+                        )
+                        print(
+                            f"  Baseline {bl}: {percent_flagged:.1f}% flagged - PROCESS"
+                        )
+                    valid_baselines.append(bl)
+
+        print(
+            f"[PRE-FILTER] Result: {len(valid_baselines)} valid, {baselines_skipped} completely flagged"
+        )
+
+    except Exception as e:
+        print(
+            f"[PRE-FILTER] Warning: Pre-filter failed ({str(e)}), processing all baselines"
+        )
+        valid_baselines = baselines  # Fall back to processing all
+
+    # Skip if no valid baselines
+    if not valid_baselines:
+        print(f"No valid baselines to process in field {field_id}.")
+        return {
+            "total_flagged": total_flagged,
+            "total_new_flags": total_new_flags,
+            "total_visibilities": total_visibilities,
+            "baselines_processed": baselines_processed,
+            "baselines_skipped": baselines_skipped,
+        }
+
     # Process baselines in batches where possible
     baseline_data = {}  # Dictionary to store baseline data
 
@@ -1897,12 +1973,12 @@ def process_single_field(
 
         if bl_per_batch > 1:
             # Batch processing is possible
-            for i in range(0, len(baselines), bl_per_batch):
-                batch = baselines[i : i + bl_per_batch]
+            for i in range(0, len(valid_baselines), bl_per_batch):
+                batch = valid_baselines[i : i + bl_per_batch]
                 batch_size = len(batch)
 
                 print(
-                    f"\nProcessing batch {i // bl_per_batch + 1}/{(len(baselines) + bl_per_batch - 1) // bl_per_batch}: {batch_size} baselines"
+                    f"\nProcessing batch {i // bl_per_batch + 1}/{(len(valid_baselines) + bl_per_batch - 1) // bl_per_batch}: {batch_size} baselines"
                 )
 
                 # Read all baselines in one query
@@ -1959,12 +2035,7 @@ def process_single_field(
                     bl_data = np.array(baseline_data[bl]["data"])
                     bl_flags = np.array(baseline_data[bl]["flags"])
 
-                    # Check if completely flagged
-                    if np.all(bl_flags):
-                        if options["verbose"]:
-                            print(f"Baseline {bl} is completely flagged. Skipping.")
-                        baselines_skipped += 1
-                        continue
+                    # Note: Completely flagged baselines already filtered out in pre-filter step
 
                     # Create data object
                     class MaterializedData:
@@ -2131,10 +2202,10 @@ def process_single_field(
         )
 
         # Process each baseline
-        for bl_idx, bl in enumerate(tqdm(baselines, desc="Baselines")):
+        for bl_idx, bl in enumerate(tqdm(valid_baselines, desc="Baselines")):
             if options["verbose"]:
                 print(
-                    f"\nProcessing baseline {bl_idx + 1}/{len(baselines)}: Antennas {bl[0]}-{bl[1]}"
+                    f"\nProcessing baseline {bl_idx + 1}/{len(valid_baselines)}: Antennas {bl[0]}-{bl[1]}"
                 )
 
             try:
@@ -2159,12 +2230,7 @@ def process_single_field(
                     bl_ds_list[0].DATA.data, bl_ds_list[0].FLAG.data
                 )
 
-                # Skip if all flagged
-                if np.all(bl_flags):
-                    if options["verbose"]:
-                        print(f"Baseline {bl} is completely flagged. Skipping.")
-                    baselines_skipped += 1
-                    continue
+                # Note: Completely flagged baselines already filtered out in pre-filter step
 
                 # Create data object
                 class MaterializedData:

@@ -1786,13 +1786,13 @@ def process_single_field(
     print(f"Getting unique baselines for field {field_id}...")
     baselines = set()
 
-    # Read antenna pairs
+    # Read antenna pairs with larger chunks for better I/O
     taql_where = f"FIELD_ID={field_id}"
     xds_list = xds_from_ms(
         ms_file,
         columns=("ANTENNA1", "ANTENNA2"),
         taql_where=taql_where,
-        chunks={"row": 50000},
+        chunks={"row": 200000},  # 4x larger for better I/O throughput
     )
 
     # Extract unique baselines
@@ -1891,12 +1891,12 @@ def process_single_field(
     taql_where_all = f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
 
     try:
-        # Read only FLAG column for all baselines (lightweight)
+        # Read only FLAG column for all baselines with large chunks
         flag_ds_list = xds_from_ms(
             ms_file,
             columns=("FLAG", "ANTENNA1", "ANTENNA2"),
             taql_where=taql_where_all,
-            chunks={"row": 50000},
+            chunks={"row": 200000},  # Large chunks for better I/O
         )
 
         # Check each baseline

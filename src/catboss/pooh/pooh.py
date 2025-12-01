@@ -1555,12 +1555,14 @@ def process_baseline_async(
         # Process a single correlation
         corr_idx = corr_to_process[0]
 
-        # Extract data
-        vis_data = bl_data.DATA[:, :, corr_idx].copy()
-        existing_flags = bl_data.FLAG[:, :, corr_idx].copy()
+        # Extract data (use views where possible to avoid copying)
+        vis_data = bl_data.DATA[
+            :, :, corr_idx
+        ]  # View - will be copied by masked_array if needed
+        existing_flags = bl_data.FLAG[:, :, corr_idx]  # View - read-only
         existing_flag_count += np.sum(existing_flags)
 
-        # Calculate amplitude
+        # Calculate amplitude (this creates a new array, so no copy needed above)
         masked_data = np.ma.masked_array(vis_data, mask=existing_flags)
         vis_amp = np.abs(masked_data.filled(0))
 
@@ -1615,16 +1617,16 @@ def process_baseline_async(
         and corr_to_process[0] == 0
         and corr_to_process[-1] == bl_data.DATA.shape[2] - 1
     ):
-        # Process combined correlations (Stokes I approximation)
-        vis_data_0 = bl_data.DATA[:, :, corr_to_process[0]].copy()
-        vis_data_1 = bl_data.DATA[:, :, corr_to_process[1]].copy()
-        existing_flags_0 = bl_data.FLAG[:, :, corr_to_process[0]].copy()
-        existing_flags_1 = bl_data.FLAG[:, :, corr_to_process[1]].copy()
+        # Process combined correlations (Stokes I approximation) - use views
+        vis_data_0 = bl_data.DATA[:, :, corr_to_process[0]]  # View
+        vis_data_1 = bl_data.DATA[:, :, corr_to_process[1]]  # View
+        existing_flags_0 = bl_data.FLAG[:, :, corr_to_process[0]]  # View
+        existing_flags_1 = bl_data.FLAG[:, :, corr_to_process[1]]  # View
 
         # Count existing flags
         existing_flag_count += np.sum(existing_flags_0) + np.sum(existing_flags_1)
 
-        # Replace flagged values with zeros
+        # Replace flagged values with zeros (creates new arrays)
         masked_data_0 = np.ma.masked_array(vis_data_0, mask=existing_flags_0).filled(0)
         masked_data_1 = np.ma.masked_array(vis_data_1, mask=existing_flags_1).filled(0)
 
@@ -1780,19 +1782,22 @@ def process_single_field(
     baselines_processed = 0
     baselines_skipped = 0
 
+    # Get chunk size from options (user-configurable)
+    chunk_size = options.get("chunk_size", 200000)
+
     print(f"\n*** Processing Field {field_id} ***")
 
     # Get unique baselines for this field
     print(f"Getting unique baselines for field {field_id}...")
     baselines = set()
 
-    # Read antenna pairs with larger chunks for better I/O
+    # Read antenna pairs with configurable chunk size
     taql_where = f"FIELD_ID={field_id}"
     xds_list = xds_from_ms(
         ms_file,
         columns=("ANTENNA1", "ANTENNA2"),
         taql_where=taql_where,
-        chunks={"row": 200000},  # 4x larger for better I/O throughput
+        chunks={"row": chunk_size},
     )
 
     # Extract unique baselines
@@ -1891,12 +1896,12 @@ def process_single_field(
     taql_where_all = f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
 
     try:
-        # Read only FLAG column for all baselines with large chunks
+        # Read only FLAG column for all baselines with configurable chunks
         flag_ds_list = xds_from_ms(
             ms_file,
             columns=("FLAG", "ANTENNA1", "ANTENNA2"),
             taql_where=taql_where_all,
-            chunks={"row": 200000},  # Large chunks for better I/O
+            chunks={"row": chunk_size},
         )
 
         # Check each baseline

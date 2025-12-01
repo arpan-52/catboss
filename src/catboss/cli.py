@@ -7,10 +7,12 @@ import argparse
 import sys
 import json
 
+
 def load_config(config_path):
     """Load configuration from JSON file"""
-    with open(config_path, 'r') as f:
+    with open(config_path, "r") as f:
         return json.load(f)
+
 
 def main():
     # Main parser
@@ -22,13 +24,15 @@ Examples:
   catboss --cat pooh data.ms --apply-flags
   catboss --cat pooh data.ms --config config.json
   catboss --cat pooh -h  (for POOH-specific help)
-        """
+        """,
     )
 
-    parser.add_argument("--version", action="store_true",
-                       help="Show version information")
-    parser.add_argument("--cat", type=str, choices=["pooh"],
-                       help="Select RFI flagging algorithm")
+    parser.add_argument(
+        "--version", action="store_true", help="Show version information"
+    )
+    parser.add_argument(
+        "--cat", type=str, choices=["pooh"], help="Select RFI flagging algorithm"
+    )
 
     # Parse to check if --cat is specified
     args, remaining = parser.parse_known_args()
@@ -65,61 +69,105 @@ Examples:
 
   # Using config file
   catboss --cat pooh data.ms --config config.json
-            """
+            """,
         )
 
         # Required arguments
-        pooh_parser.add_argument('ms_path',
-                                help='Path to Measurement Set file')
+        pooh_parser.add_argument("ms_path", help="Path to Measurement Set file")
 
         # Configuration file
-        pooh_parser.add_argument('--config', type=str,
-                                help='Path to JSON configuration file (overrides other options)')
+        pooh_parser.add_argument(
+            "--config",
+            type=str,
+            help="Path to JSON configuration file (overrides other options)",
+        )
 
         # Multi-scale parameters
-        pooh_parser.add_argument('--combinations', type=str,
-                                default='1,2,4,8,16,32,64',
-                                help='Comma-separated window sizes for multi-scale detection (default: 1,2,4,8,16,32,64)')
-        pooh_parser.add_argument('--sigma', type=float,
-                                default=6.0,
-                                help='Threshold multiplier (lower = more aggressive) (default: 6.0)')
-        pooh_parser.add_argument('--rho', type=float,
-                                default=1.5,
-                                help='Reduction factor for larger windows (default: 1.5)')
+        pooh_parser.add_argument(
+            "--combinations",
+            type=str,
+            default="1,2,4,8,16,32,64",
+            help="Comma-separated window sizes for multi-scale detection (default: 1,2,4,8,16,32,64)",
+        )
+        pooh_parser.add_argument(
+            "--sigma",
+            type=float,
+            default=6.0,
+            help="Threshold multiplier (lower = more aggressive) (default: 6.0)",
+        )
+        pooh_parser.add_argument(
+            "--rho",
+            type=float,
+            default=1.5,
+            help="Reduction factor for larger windows (default: 1.5)",
+        )
 
         # Bandpass normalization parameters
-        pooh_parser.add_argument('--poly-degree', type=int,
-                                default=5,
-                                help='Polynomial degree for bandpass fitting (3-9) (default: 5)')
-        pooh_parser.add_argument('--deviation-threshold', type=float,
-                                default=3.0,
-                                help='RFI channel detection threshold in sigma (default: 3.0)')
+        pooh_parser.add_argument(
+            "--poly-degree",
+            type=int,
+            default=5,
+            help="Polynomial degree for bandpass fitting (3-9) (default: 5)",
+        )
+        pooh_parser.add_argument(
+            "--deviation-threshold",
+            type=float,
+            default=3.0,
+            help="RFI channel detection threshold in sigma (default: 3.0)",
+        )
 
         # Correlation selection
-        pooh_parser.add_argument('--polarizations', type=str,
-                                default=None,
-                                help='Comma-separated correlation indices (default: 0 and last)')
+        pooh_parser.add_argument(
+            "--polarizations",
+            type=str,
+            default=None,
+            help="Comma-separated correlation indices (default: 0 and last)",
+        )
 
         # Output options
-        pooh_parser.add_argument('--apply-flags', action='store_true',
-                                help='Write flags to MS file (default: False)')
-        pooh_parser.add_argument('--diagnostic-plots', action='store_true',
-                                help='Generate diagnostic plots (default: False)')
-        pooh_parser.add_argument('--output-dir', type=str,
-                                default='outputs',
-                                help='Directory for diagnostic plots (default: outputs)')
+        pooh_parser.add_argument(
+            "--apply-flags",
+            action="store_true",
+            help="Write flags to MS file (default: False)",
+        )
+        pooh_parser.add_argument(
+            "--diagnostic-plots",
+            action="store_true",
+            help="Generate diagnostic plots (default: False)",
+        )
+        pooh_parser.add_argument(
+            "--output-dir",
+            type=str,
+            default="outputs",
+            help="Directory for diagnostic plots (default: outputs)",
+        )
 
         # Performance options
-        pooh_parser.add_argument('--max-threads', type=int,
-                                default=16,
-                                help='Max threads for bandpass processing (default: 16)')
-        pooh_parser.add_argument('--max-memory-usage', type=float,
-                                default=0.8,
-                                help='Fraction of memory to use (0.0-1.0) (default: 0.8)')
+        pooh_parser.add_argument(
+            "--max-threads",
+            type=int,
+            default=16,
+            help="Max threads for bandpass processing (default: 16)",
+        )
+        pooh_parser.add_argument(
+            "--max-memory-usage",
+            type=float,
+            default=0.8,
+            help="Fraction of memory to use (0.0-1.0) (default: 0.8)",
+        )
+        pooh_parser.add_argument(
+            "--chunk-size",
+            type=int,
+            default=200000,
+            help="I/O chunk size in rows for reading MS data (default: 200000, larger = faster I/O)",
+        )
 
         # Verbosity
-        pooh_parser.add_argument('--verbose', action='store_true',
-                                help='Enable verbose output (default: False)')
+        pooh_parser.add_argument(
+            "--verbose",
+            action="store_true",
+            help="Enable verbose output (default: False)",
+        )
 
         # Parse POOH arguments
         pooh_args = pooh_parser.parse_args(remaining)
@@ -131,18 +179,25 @@ Examples:
         else:
             # Build options from command line arguments
             config_options = {
-                'combinations': [int(x.strip()) for x in pooh_args.combinations.split(',')],
-                'sigma_factor': pooh_args.sigma,
-                'rho': pooh_args.rho,
-                'poly_degree': pooh_args.poly_degree,
-                'deviation_threshold': pooh_args.deviation_threshold,
-                'corr_to_process': [int(x.strip()) for x in pooh_args.polarizations.split(',')] if pooh_args.polarizations else None,
-                'apply_flags': pooh_args.apply_flags,
-                'diagnostic_plots': pooh_args.diagnostic_plots,
-                'output_dir': pooh_args.output_dir,
-                'max_threads': pooh_args.max_threads,
-                'max_memory_usage': pooh_args.max_memory_usage,
-                'verbose': pooh_args.verbose
+                "combinations": [
+                    int(x.strip()) for x in pooh_args.combinations.split(",")
+                ],
+                "sigma_factor": pooh_args.sigma,
+                "rho": pooh_args.rho,
+                "poly_degree": pooh_args.poly_degree,
+                "deviation_threshold": pooh_args.deviation_threshold,
+                "corr_to_process": [
+                    int(x.strip()) for x in pooh_args.polarizations.split(",")
+                ]
+                if pooh_args.polarizations
+                else None,
+                "apply_flags": pooh_args.apply_flags,
+                "diagnostic_plots": pooh_args.diagnostic_plots,
+                "output_dir": pooh_args.output_dir,
+                "max_threads": pooh_args.max_threads,
+                "max_memory_usage": pooh_args.max_memory_usage,
+                "chunk_size": pooh_args.chunk_size,
+                "verbose": pooh_args.verbose,
             }
 
         # Run POOH
@@ -191,6 +246,7 @@ Examples:
         print("  pooh    Parallelized Optimized Outlier Hunter")
         print("\nUse 'catboss --cat pooh -h' for POOH-specific help")
         return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

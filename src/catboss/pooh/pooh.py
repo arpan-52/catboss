@@ -15,7 +15,7 @@ import concurrent.futures
 
 # Check GPU availability and import Numba
 try:
-    from numba import cuda, jit
+    from numba import cuda, jit, prange
 
     GPU_AVAILABLE = cuda.is_available()
     if GPU_AVAILABLE:
@@ -24,7 +24,7 @@ try:
         print("No GPU detected - will use CPU processing")
 except Exception as e:
     print(f"GPU check failed: {e} - will use CPU processing")
-    from numba import jit
+    from numba import jit, prange
 
     GPU_AVAILABLE = False
     cuda = None
@@ -434,8 +434,6 @@ def calculate_channel_medians_parallel(amp, flags, sigma_factor):
     Optimized parallel calculation of channel medians using Numba.
     Processes all channels in parallel across CPU cores.
     """
-    from numba import prange
-
     n_time, n_chan = amp.shape
     channel_thresholds = np.zeros(n_chan, dtype=np.float32)
 
@@ -514,8 +512,6 @@ def calculate_bandpass_parallel(amp, flags):
     Calculates median across time for each channel in parallel.
     5-10x faster than sequential version.
     """
-    from numba import prange
-
     n_time, n_chan = amp.shape
     bandpass = np.zeros(n_chan, dtype=np.float32)
 
@@ -551,8 +547,6 @@ def apply_bandpass_normalization_parallel(amp, flags, smooth_bandpass, rfi_chann
     Applies normalization and RFI flagging in-place across channels in parallel.
     2-3x faster than sequential version.
     """
-    from numba import prange
-
     n_time, n_chan = amp.shape
 
     # Process channels in parallel

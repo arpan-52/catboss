@@ -682,7 +682,6 @@ def sumthreshold_gpu(
         for M in combinations:
             # Calculate thresholds for this combination size
             combo_channel_thresholds = channel_thresholds / (rho ** np.log2(M))
-            print(combo_channel_thresholds)
 
             # Copy thresholds to GPU
             d_thresholds = cuda.to_device(
@@ -720,7 +719,6 @@ def sumthreshold_gpu(
         for M in combinations:
             # Calculate thresholds for this combination size
             combo_channel_thresholds = channel_thresholds / (rho ** np.log2(M))
-            print(combo_channel_thresholds)
 
             # Time direction processing
             sum_threshold_cpu_time_channel(
@@ -1174,9 +1172,6 @@ def process_baselines_batch_gpu(
             base_thresholds = calculate_robust_thresholds(
                 normalized_amp, normalized_flags, options["sigma_factor"]
             )
-
-            print("***********************")
-            print(base_thresholds)
 
             bl_results[bl] = {
                 "base_thresholds": base_thresholds,

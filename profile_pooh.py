@@ -34,6 +34,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from catboss.pooh import pooh
+from catboss.logger import setup_logger
 
 
 class PerformanceProfiler:
@@ -297,6 +298,9 @@ Examples:
         if args.polarizations:
             corr_to_process = [int(x.strip()) for x in args.polarizations.split(",")]
 
+        # Setup logger
+        logger = setup_logger(verbose=args.verbose)
+
         options = {
             "combinations": combinations,
             "sigma_factor": args.sigma,
@@ -310,6 +314,7 @@ Examples:
             "max_threads": args.max_threads,
             "max_memory_usage": args.max_memory_usage,
             "verbose": args.verbose,
+            "logger": logger,
         }
 
     # Run profiled execution

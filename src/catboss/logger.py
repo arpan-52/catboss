@@ -82,7 +82,6 @@ def print_banner():
     """Print the CATBOSS ASCII art banner"""
     banner = """
 \033[35m\033[1m
-
                                                      900002       0805   80000000000 00000008        20002      300008     100009
                                                   70000000000    10000   00000088800 0080008800   0708008000  7008008808  008088008
                                                  1800      6     880808      087     008    008  888 7  7 888 000        800
@@ -91,10 +90,10 @@ def print_banner():
                                                   008     20  26208000008    00       00     008 008 000 7000  9     8007 9     8003
                                                    8000080003 8 0      000   078     00000088001  0000000088  0000000008 0088008000
                                                       9005   669       7666  666     66666965        9006        20081      50003
-
 \033[0m
-\033[33m\033[1m                                    CATBOSS - Radio Astronomy RFI Flagging Suite\033[0m
-\033[36m                                         Developed by Arpan Pal, NCRA-TIFR, Dec 2024\033[0m
+
+\033[33m\033[1m                                           CATBOSS - Radio Astronomy RFI Flagging Suite\033[0m
+\033[36m                                                Developed by Arpan Pal, NCRA-TIFR, Dec 2024\033[0m
 """
     print(banner)
 

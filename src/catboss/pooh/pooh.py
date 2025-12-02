@@ -754,22 +754,37 @@ def sumthreshold_gpu(
     return processed_flags, baseline_info
 
 
-def get_memory_info():
+def get_memory_info(logger=None):
     """Get information about available GPU and system memory"""
     # Get GPU memory information
     if GPU_AVAILABLE:
         try:
             free_mem, total_mem = cuda.current_context().get_memory_info()
             gpu_usable_mem = free_mem * 0.9  # Use 90% of free memory to be safe
-            print(
-                f"GPU memory: {total_mem / 1e9:.2f} GB (free: {free_mem / 1e9:.2f} GB, usable: {gpu_usable_mem / 1e9:.2f} GB)"
-            )
+            if logger:
+                logger.info(
+                    f"   🎮 GPU: {total_mem / 1e9:.2f} GB total | {free_mem / 1e9:.2f} GB free | {gpu_usable_mem / 1e9:.2f} GB usable"
+                )
+            else:
+                print(
+                    f"GPU memory: {total_mem / 1e9:.2f} GB (free: {free_mem / 1e9:.2f} GB, usable: {gpu_usable_mem / 1e9:.2f} GB)"
+                )
         except Exception as e:
-            print(f"Warning: Could not determine GPU memory, assuming 8GB: {str(e)}")
+            if logger:
+                logger.warning(
+                    f"Could not determine GPU memory, assuming 8GB: {str(e)}"
+                )
+            else:
+                print(
+                    f"Warning: Could not determine GPU memory, assuming 8GB: {str(e)}"
+                )
             gpu_usable_mem = 6 * 1024 * 1024 * 1024 * 0.8  # Assume 8GB, use 80%
     else:
         gpu_usable_mem = 0
-        print("No GPU available")
+        if logger:
+            logger.info("   ❌ No GPU available - using CPU only")
+        else:
+            print("No GPU available")
 
     # Get system memory information
     try:
@@ -779,11 +794,23 @@ def get_memory_info():
         system_usable_mem = (
             available_system_mem * 0.6
         )  # Use 60% of available memory (conservative)
-        print(
-            f"System memory: {total_system_mem / 1e9:.2f} GB (available: {available_system_mem / 1e9:.2f} GB, usable: {system_usable_mem / 1e9:.2f} GB)"
-        )
+        if logger:
+            logger.info(
+                f"   💻 RAM: {total_system_mem / 1e9:.2f} GB total | {available_system_mem / 1e9:.2f} GB available | {system_usable_mem / 1e9:.2f} GB usable"
+            )
+        else:
+            print(
+                f"System memory: {total_system_mem / 1e9:.2f} GB (available: {available_system_mem / 1e9:.2f} GB, usable: {system_usable_mem / 1e9:.2f} GB)"
+            )
     except Exception as e:
-        print(f"Warning: Could not determine system memory, assuming 16GB: {str(e)}")
+        if logger:
+            logger.warning(
+                f"Could not determine system memory, assuming 16GB: {str(e)}"
+            )
+        else:
+            print(
+                f"Warning: Could not determine system memory, assuming 16GB: {str(e)}"
+            )
         system_usable_mem = 16 * 1024 * 1024 * 1024 * 0.6  # Assume 16GB, use 60%
 
     return gpu_usable_mem, system_usable_mem
@@ -2366,7 +2393,8 @@ def process_single_field(
 
 def hunt_ms(ms_file, options):
     """The main function which processes the MS file with SumThreshold flagging"""
-    print(f"\nPOOH is on the hunt in {ms_file}...")
+    # Get logger from options
+    logger = options.get("logger")
 
     # Create output directory if needed
     if options["diagnostic_plots"]:
@@ -2375,22 +2403,27 @@ def hunt_ms(ms_file, options):
 
     # Get antenna info
     antenna_ds = xds_from_table(f"{ms_file}::ANTENNA")[0]
-    print("\n==== ANTENNA TABLE INFO ====")
-    print(f"Number of antennas: {antenna_ds.sizes['row']}")
-    print(f"Antenna names: {antenna_ds.NAME.values}")
+    logger.info("\n📡 ANTENNA TABLE INFO")
+    logger.info(f"   Number of antennas: {antenna_ds.sizes['row']}")
+    if options.get("verbose"):
+        logger.debug(f"   Antenna names: {antenna_ds.NAME.values}")
 
     # Get spectral window info
     spw_ds = xds_from_table(f"{ms_file}::SPECTRAL_WINDOW")[0]
-    print("\n==== SPECTRAL WINDOW INFO ====")
-    print(f"Number of channels: {spw_ds.NUM_CHAN.values[0]}")
-    print(f"Channel frequencies: {spw_ds.CHAN_FREQ.values[0][:5]}... (showing first 5)")
-    print(f"Channel width: {spw_ds.CHAN_WIDTH.values[0][0]} Hz")
+    logger.info("\n📊 SPECTRAL WINDOW INFO")
+    logger.info(f"   Number of channels: {spw_ds.NUM_CHAN.values[0]}")
+    logger.info(f"   Channel width: {spw_ds.CHAN_WIDTH.values[0][0]:.2f} Hz")
+    if options.get("verbose"):
+        logger.debug(
+            f"   Channel frequencies: {spw_ds.CHAN_FREQ.values[0][:5]}... (first 5)"
+        )
 
     # Get frequency axis
     freq_axis = spw_ds.CHAN_FREQ.values[0]
 
     # Get memory information
-    gpu_usable_mem, system_usable_mem = get_memory_info()
+    logger.info("\n💾 MEMORY ALLOCATION")
+    gpu_usable_mem, system_usable_mem = get_memory_info(logger)
 
     # Track statistics
     total_start_time = time.time()
@@ -2401,13 +2434,14 @@ def hunt_ms(ms_file, options):
     baselines_skipped = 0
 
     # Get field IDs
-    print("Getting field IDs...")
+    logger.info("\n🔍 Discovering fields...")
     try:
         field_ds = xds_from_table(f"{ms_file}::FIELD")[0]
         field_ids = np.arange(field_ds.sizes["row"])
-        print(f"Found field IDs: {field_ids}")
+        logger.info(f"   Found {len(field_ids)} field(s): {field_ids}")
     except Exception as e:
-        print(f"Warning: Could not extract field IDs from MS: {str(e)}")
+        logger.warning(f"Could not extract field IDs from MS: {str(e)}")
+        logger.info("   Defaulting to field 0")
         field_ids = [0]  # Default to field 0
 
     # Determine if we can process fields in parallel (informational)

@@ -15,17 +15,46 @@ def load_config(config_path):
 
 
 def main():
-    # Main parser
+    # Check for POOH-specific help first
+    if "--cat" in sys.argv and "pooh" in sys.argv and ("-h" in sys.argv or "--help" in sys.argv):
+        # Create POOH parser just for help
+        help_parser = argparse.ArgumentParser(
+            prog="catboss --cat pooh",
+            description="POOH: Parallelized Optimized Outlier Hunter",
+        )
+        help_parser.add_argument("ms_path", help="Path to Measurement Set file")
+        help_parser.add_argument("--combinations", default="1,2,4,8,16,32,64")
+        help_parser.add_argument("--sigma", type=float, default=6.0)
+        help_parser.add_argument("--rho", type=float, default=1.5)
+        help_parser.add_argument("--poly-degree", type=int, default=5)
+        help_parser.add_argument("--deviation-threshold", type=float, default=3.0)
+        help_parser.add_argument("--polarizations", default=None)
+        help_parser.add_argument("--apply-flags", action="store_true")
+        help_parser.add_argument("--diagnostic-plots", action="store_true")
+        help_parser.add_argument("--output-dir", default="outputs")
+        help_parser.add_argument("--max-threads", type=int, default=16)
+        help_parser.add_argument("--max-memory-usage", type=float, default=0.8)
+        help_parser.add_argument("--chunk-size", type=int, default=200000)
+        help_parser.add_argument("--verbose", action="store_true")
+        help_parser.print_help()
+        return 0
+
+    # Main parser (add_help=False to let sub-parsers handle help)
     parser = argparse.ArgumentParser(
         description="CATBOSS - Radio Astronomy RFI Flagging Suite",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False,  # Let sub-parsers handle help
         epilog="""
 Examples:
+  catboss -h                          (show this help)
   catboss --cat pooh data.ms --apply-flags
   catboss --cat pooh data.ms --config config.json
-  catboss --cat pooh -h  (for POOH-specific help)
+  catboss --cat pooh -h               (show POOH-specific help)
         """,
     )
+
+    # Add manual help option
+    parser.add_argument("-h", "--help", action="store_true", help="Show help message")
 
     parser.add_argument(
         "--version", action="store_true", help="Show version information"
@@ -36,6 +65,11 @@ Examples:
 
     # Parse to check if --cat is specified
     args, remaining = parser.parse_known_args()
+
+    # Handle help for main parser
+    if args.help and not args.cat:
+        parser.print_help()
+        return 0
 
     # Handle version
     if args.version:
@@ -73,7 +107,9 @@ Examples:
         )
 
         # Required arguments
-        pooh_parser.add_argument("ms_path", help="Path to Measurement Set file")
+        pooh_parser.add_argument(
+            "ms_path", nargs="?", help="Path to Measurement Set file"
+        )
 
         # Configuration file
         pooh_parser.add_argument(
@@ -169,8 +205,17 @@ Examples:
             help="Enable verbose output (default: False)",
         )
 
+        # If -h or --help in remaining, show POOH help and exit
+        if "-h" in remaining or "--help" in remaining:
+            pooh_parser.print_help()
+            return 0
+
         # Parse POOH arguments
         pooh_args = pooh_parser.parse_args(remaining)
+
+        # Check if ms_path was provided
+        if not pooh_args.ms_path:
+            pooh_parser.error("the following arguments are required: ms_path")
 
         # Load config if specified
         if pooh_args.config:
@@ -201,41 +246,52 @@ Examples:
             }
 
         # Run POOH
-        from catboss.pooh.pooh import print_gpu_info, hunt_ms
+        from catboss.pooh.pooh import hunt_ms
+        from catboss.logger import setup_logger, print_banner, print_cat_on_hunt
 
-        print("=" * 70)
-        print("POOH: Parallelized Optimized Outlier Hunter")
-        print("Developed by Arpan Pal, NCRA-TIFR, 2025")
-        print("=" * 70)
+        # Print banner
+        print_banner()
 
-        print_gpu_info()
+        # Setup logger
+        logger = setup_logger("catboss", verbose=pooh_args.verbose)
 
-        print(f"\nProcessing: {pooh_args.ms_path}")
-        print(f"Configuration:")
-        print(f"  Window sizes: {config_options['combinations']}")
-        print(f"  Sigma factor: {config_options['sigma_factor']}")
-        print(f"  Rho: {config_options['rho']}")
-        print(f"  Polynomial degree: {config_options['poly_degree']}")
-        print(f"  Deviation threshold: {config_options['deviation_threshold']}")
-        print(f"  Correlations: {config_options['corr_to_process']}")
-        print(f"  Apply flags: {config_options['apply_flags']}")
-        print(f"  Diagnostic plots: {config_options['diagnostic_plots']}")
-        print("=" * 70)
+        # Show which cat is hunting
+        print_cat_on_hunt("POOH")
+
+        # Log configuration
+        logger.info(f"Processing Measurement Set: {pooh_args.ms_path}")
+        logger.info("=" * 70)
+        logger.info("Configuration:")
+        logger.info(f"  Window sizes: {config_options['combinations']}")
+        logger.info(f"  Sigma factor: {config_options['sigma_factor']}")
+        logger.info(f"  Rho: {config_options['rho']}")
+        logger.info(f"  Polynomial degree: {config_options['poly_degree']}")
+        logger.info(f"  Deviation threshold: {config_options['deviation_threshold']}")
+        logger.info(f"  Correlations: {config_options['corr_to_process']}")
+        logger.info(f"  Apply flags: {config_options['apply_flags']}")
+        logger.info(f"  Diagnostic plots: {config_options['diagnostic_plots']}")
+        logger.info(f"  Chunk size: {config_options['chunk_size']} rows")
+        logger.info("=" * 70)
+
+        # Pass logger to options
+        config_options["logger"] = logger
 
         # Process
         results = hunt_ms(pooh_args.ms_path, config_options)
 
         # Summary
-        print("\n" + "=" * 70)
-        print("POOH Flagging Summary")
-        print("=" * 70)
-        print(f"Measurement Set: {pooh_args.ms_path}")
-        print(f"Processing time: {results['total_processing_time']:.2f} seconds")
-        print(f"Total flagged: {results['overall_percent_flagged']:.2f}%")
-        print(f"New flags: {results['new_percent_flagged']:.2f}%")
-        print(f"Baselines processed: {results['baselines_processed']}")
-        print(f"Baselines skipped: {results['baselines_skipped']}")
-        print("=" * 70)
+        logger.info("\n" + "=" * 70)
+        logger.info("🎯 POOH Flagging Summary")
+        logger.info("=" * 70)
+        logger.info(f"Measurement Set: {pooh_args.ms_path}")
+        logger.info(
+            f"⏱️  Processing time: {results['total_processing_time']:.2f} seconds"
+        )
+        logger.info(f"📊 Total flagged: {results['overall_percent_flagged']:.2f}%")
+        logger.info(f"🆕 New flags: {results['new_percent_flagged']:.2f}%")
+        logger.info(f"✅ Baselines processed: {results['baselines_processed']}")
+        logger.info(f"⏭️  Baselines skipped: {results['baselines_skipped']}")
+        logger.info("=" * 70)
 
         return 0
 

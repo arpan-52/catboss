@@ -94,7 +94,7 @@ def print_banner():
 
 \033[0m
 \033[33m\033[1m                                    CATBOSS - Radio Astronomy RFI Flagging Suite\033[0m
-\033[36m                                           Developed by Arpan Pal, NCRA-TIFR, 2025\033[0m
+\033[36m                                         Developed by Arpan Pal, NCRA-TIFR, Dec 2024\033[0m
 """
     print(banner)
 
@@ -104,7 +104,8 @@ def print_cat_on_hunt(cat_name):
     message = f"""
 \033[32m\033[1m
 ╔════════════════════════════════════════════════════════════════════╗
-║                    🐱 {cat_name.upper()} IS ON THE HUNT! 🐱                    ║
+║                      {cat_name.upper()} IS ON THE HUNT!                       ║
+║           {cat_name.upper()} is my first cat and an excellent trouble maker.          ║
 ╔════════════════════════════════════════════════════════════════════╝
 \033[0m
 """

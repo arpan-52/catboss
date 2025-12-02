@@ -763,7 +763,7 @@ def get_memory_info(logger=None):
             gpu_usable_mem = free_mem * 0.9  # Use 90% of free memory to be safe
             if logger:
                 logger.info(
-                    f"   🎮 GPU: {total_mem / 1e9:.2f} GB total | {free_mem / 1e9:.2f} GB free | {gpu_usable_mem / 1e9:.2f} GB usable"
+                    f"   GPU: {total_mem / 1e9:.2f} GB total | {free_mem / 1e9:.2f} GB free | {gpu_usable_mem / 1e9:.2f} GB usable"
                 )
             else:
                 print(
@@ -782,7 +782,7 @@ def get_memory_info(logger=None):
     else:
         gpu_usable_mem = 0
         if logger:
-            logger.info("   ❌ No GPU available - using CPU only")
+            logger.info("   No GPU available - using CPU only")
         else:
             print("No GPU available")
 
@@ -796,7 +796,7 @@ def get_memory_info(logger=None):
         )  # Use 60% of available memory (conservative)
         if logger:
             logger.info(
-                f"   💻 RAM: {total_system_mem / 1e9:.2f} GB total | {available_system_mem / 1e9:.2f} GB available | {system_usable_mem / 1e9:.2f} GB usable"
+                f"   RAM: {total_system_mem / 1e9:.2f} GB total | {available_system_mem / 1e9:.2f} GB available | {system_usable_mem / 1e9:.2f} GB usable"
             )
         else:
             print(
@@ -2403,14 +2403,14 @@ def hunt_ms(ms_file, options):
 
     # Get antenna info
     antenna_ds = xds_from_table(f"{ms_file}::ANTENNA")[0]
-    logger.info("\n📡 ANTENNA TABLE INFO")
+    logger.info("\nANTENNA TABLE INFO")
     logger.info(f"   Number of antennas: {antenna_ds.sizes['row']}")
     if options.get("verbose"):
         logger.debug(f"   Antenna names: {antenna_ds.NAME.values}")
 
     # Get spectral window info
     spw_ds = xds_from_table(f"{ms_file}::SPECTRAL_WINDOW")[0]
-    logger.info("\n📊 SPECTRAL WINDOW INFO")
+    logger.info("\nSPECTRAL WINDOW INFO")
     logger.info(f"   Number of channels: {spw_ds.NUM_CHAN.values[0]}")
     logger.info(f"   Channel width: {spw_ds.CHAN_WIDTH.values[0][0]:.2f} Hz")
     if options.get("verbose"):
@@ -2422,7 +2422,7 @@ def hunt_ms(ms_file, options):
     freq_axis = spw_ds.CHAN_FREQ.values[0]
 
     # Get memory information
-    logger.info("\n💾 MEMORY ALLOCATION")
+    logger.info("\nMEMORY ALLOCATION")
     gpu_usable_mem, system_usable_mem = get_memory_info(logger)
 
     # Track statistics
@@ -2434,7 +2434,7 @@ def hunt_ms(ms_file, options):
     baselines_skipped = 0
 
     # Get field IDs
-    logger.info("\n🔍 Discovering fields...")
+    logger.info("\nDiscovering fields...")
     try:
         field_ds = xds_from_table(f"{ms_file}::FIELD")[0]
         field_ids = np.arange(field_ds.sizes["row"])

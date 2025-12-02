@@ -281,16 +281,16 @@ Examples:
 
         # Summary
         logger.info("\n" + "=" * 70)
-        logger.info("🎯 POOH Flagging Summary")
+        logger.info("POOH Flagging Summary")
         logger.info("=" * 70)
         logger.info(f"Measurement Set: {pooh_args.ms_path}")
         logger.info(
-            f"⏱️  Processing time: {results['total_processing_time']:.2f} seconds"
+            f"Processing time: {results['total_processing_time']:.2f} seconds"
         )
-        logger.info(f"📊 Total flagged: {results['overall_percent_flagged']:.2f}%")
-        logger.info(f"🆕 New flags: {results['new_percent_flagged']:.2f}%")
-        logger.info(f"✅ Baselines processed: {results['baselines_processed']}")
-        logger.info(f"⏭️  Baselines skipped: {results['baselines_skipped']}")
+        logger.info(f"Total flagged: {results['overall_percent_flagged']:.2f}%")
+        logger.info(f"New flags: {results['new_percent_flagged']:.2f}%")
+        logger.info(f"Baselines processed: {results['baselines_processed']}")
+        logger.info(f"Baselines skipped: {results['baselines_skipped']}")
         logger.info("=" * 70)
 
         return 0

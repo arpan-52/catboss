@@ -2442,9 +2442,14 @@ def hunt_ms(ms_file, options):
         field_ids = [0]  # Default to field 0
 
     # Determine if we can process fields in parallel (informational)
-    parallel_fields = determine_parallel_field_count(
-        ms_file, field_ids, system_usable_mem, logger=logger
-    )
+    # DISABLED: Field-level parallelization causes MS locking issues
+    # when multiple processes try to read from the same MS file
+    parallel_fields = 1  # Force sequential field processing
+
+    # Keep this for future reference when we implement proper pre-loading
+    # parallel_fields = determine_parallel_field_count(
+    #     ms_file, field_ids, system_usable_mem, logger=logger
+    # )
 
     # FIELD-LEVEL PARALLELIZATION
     if parallel_fields > 1 and len(field_ids) > 1:

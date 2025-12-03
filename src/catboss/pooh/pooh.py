@@ -2383,6 +2383,18 @@ def hunt_ms(ms_file, options):
     # Get logger from options
     logger = options.get("logger")
 
+    # Clean up any stale lock files from previous runs
+    import glob
+    lock_files = glob.glob(os.path.join(ms_file, "**/table.lock"), recursive=True)
+    if lock_files:
+        logger.info(f"Found {len(lock_files)} stale lock file(s), removing...")
+        for lock_file in lock_files:
+            try:
+                os.remove(lock_file)
+                logger.debug(f"   Removed: {lock_file}")
+            except Exception as e:
+                logger.warning(f"   Could not remove {lock_file}: {e}")
+
     # Create output directory if needed
     if options["diagnostic_plots"]:
         output_dir = options.get("output_dir", "outputs")
@@ -2489,6 +2501,10 @@ def hunt_ms(ms_file, options):
     new_percent_flagged = (
         100 * total_new_flags / total_visibilities if total_visibilities > 0 else 0
     )
+
+    # Force garbage collection to ensure tables are closed
+    import gc
+    gc.collect()
 
     # Return results
     results = {

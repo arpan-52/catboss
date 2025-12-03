@@ -1777,11 +1777,14 @@ def process_baseline_async(
 
 
 def process_single_field(
-    ms_file, field_id, options, freq_axis, gpu_usable_mem, system_usable_mem
+    ms_file, field_id, options, freq_axis, gpu_usable_mem, system_usable_mem, preloaded_baselines=None
 ):
     """
     Process a single field independently. Can be called via multiprocessing.
     Returns statistics dictionary.
+
+    Args:
+        preloaded_baselines: Optional list of (ant1, ant2) tuples. If provided, skips baseline discovery.
     """
     # Get logger from options
     logger = options.get("logger")
@@ -1798,27 +1801,31 @@ def process_single_field(
 
     logger.info(f"\n*** Processing Field {field_id} ***")
 
-    # Get unique baselines for this field
-    logger.info(f"Getting unique baselines for field {field_id}...")
-    baselines = set()
+    # Get unique baselines for this field (either pre-loaded or discover now)
+    if preloaded_baselines is not None:
+        baselines = preloaded_baselines
+        logger.info(f"Using pre-loaded baselines: {len(baselines)} baselines in field {field_id}")
+    else:
+        logger.info(f"Getting unique baselines for field {field_id}...")
+        baselines = set()
 
-    # Read antenna pairs with configurable chunk size
-    taql_where = f"FIELD_ID={field_id}"
-    xds_list = xds_from_ms(
-        ms_file,
-        columns=("ANTENNA1", "ANTENNA2"),
-        taql_where=taql_where,
-        chunks={"row": chunk_size},
-    )
+        # Read antenna pairs with configurable chunk size
+        taql_where = f"FIELD_ID={field_id}"
+        xds_list = xds_from_ms(
+            ms_file,
+            columns=("ANTENNA1", "ANTENNA2"),
+            taql_where=taql_where,
+            chunks={"row": chunk_size},
+        )
 
-    # Extract unique baselines
-    for ds in xds_list:
-        ant1, ant2 = dask.compute(ds.ANTENNA1.data, ds.ANTENNA2.data)
-        for a1, a2 in zip(ant1, ant2):
-            baselines.add((a1, a2))
+        # Extract unique baselines
+        for ds in xds_list:
+            ant1, ant2 = dask.compute(ds.ANTENNA1.data, ds.ANTENNA2.data)
+            for a1, a2 in zip(ant1, ant2):
+                baselines.add((a1, a2))
 
-    baselines = list(baselines)
-    logger.info(f"Found {len(baselines)} unique baselines in field {field_id}")
+        baselines = list(baselines)
+        logger.info(f"Found {len(baselines)} unique baselines in field {field_id}")
 
     # Skip if no baselines
     if not baselines:
@@ -2441,15 +2448,37 @@ def hunt_ms(ms_file, options):
         logger.info("   Defaulting to field 0")
         field_ids = [0]  # Default to field 0
 
-    # Determine if we can process fields in parallel (informational)
-    # DISABLED: Field-level parallelization causes MS locking issues
-    # when multiple processes try to read from the same MS file
-    parallel_fields = 1  # Force sequential field processing
+    # Determine if we can process fields in parallel
+    parallel_fields = determine_parallel_field_count(
+        ms_file, field_ids, system_usable_mem, logger=logger
+    )
 
-    # Keep this for future reference when we implement proper pre-loading
-    # parallel_fields = determine_parallel_field_count(
-    #     ms_file, field_ids, system_usable_mem, logger=logger
-    # )
+    # PRE-LOAD: Discover baselines for all fields BEFORE parallelization
+    # This avoids MS locking issues when workers try to discover baselines simultaneously
+    if parallel_fields > 1 and len(field_ids) > 1:
+        logger.info("\nPre-loading baseline information for parallel processing...")
+        field_baselines = {}
+        for field_id in field_ids:
+            try:
+                taql_where = f"FIELD_ID={field_id}"
+                ds_list = xds_from_ms(
+                    ms_file,
+                    columns=("ANTENNA1", "ANTENNA2"),
+                    taql_where=taql_where,
+                    chunks={"row": 100000},
+                )
+                if ds_list:
+                    ant1, ant2 = dask.compute(ds_list[0].ANTENNA1.data, ds_list[0].ANTENNA2.data)
+                    baselines = list(set(zip(ant1, ant2)))
+                    field_baselines[field_id] = baselines
+                    logger.debug(f"   Field {field_id}: {len(baselines)} baselines")
+                else:
+                    field_baselines[field_id] = []
+            except Exception as e:
+                logger.warning(f"   Could not pre-load baselines for field {field_id}: {e}")
+                field_baselines[field_id] = []
+    else:
+        field_baselines = None
 
     # FIELD-LEVEL PARALLELIZATION
     if parallel_fields > 1 and len(field_ids) > 1:
@@ -2468,7 +2497,7 @@ def hunt_ms(ms_file, options):
             logger.info(f"{'=' * 70}\n")
 
             args_list = [
-                (ms_file, fid, options, freq_axis, gpu_usable_mem, system_usable_mem)
+                (ms_file, fid, options, freq_axis, gpu_usable_mem, system_usable_mem, field_baselines.get(fid))
                 for fid in batch_ids
             ]
 
@@ -2486,7 +2515,8 @@ def hunt_ms(ms_file, options):
         logger.info(f"\n[SEQUENTIAL MODE] Processing {len(field_ids)} field(s)\n")
         for field_id in field_ids:
             stats = process_single_field(
-                ms_file, field_id, options, freq_axis, gpu_usable_mem, system_usable_mem
+                ms_file, field_id, options, freq_axis, gpu_usable_mem, system_usable_mem,
+                field_baselines.get(field_id) if field_baselines else None
             )
             total_flagged += stats["total_flagged"]
             total_new_flags += stats["total_new_flags"]

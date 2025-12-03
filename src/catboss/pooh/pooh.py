@@ -1896,7 +1896,7 @@ def process_single_field(
 
     # PRE-FILTER: Check which baselines are completely flagged (load only FLAG, not DATA)
     logger.info(f"\n[PRE-FILTER] Checking flag status for {len(baselines)} baselines...")
-    valid_baselines = []
+    valid_baselines_set = set()  # Use set to avoid duplicates
     baseline_flag_map = {}  # Map baseline -> is_completely_flagged
 
     # Build query for all baselines at once
@@ -1947,8 +1947,9 @@ def process_single_field(
                         logger.debug(
                             f"  Baseline {bl}: {percent_flagged:.1f}% flagged - PROCESS"
                         )
-                    valid_baselines.append(bl)
+                    valid_baselines_set.add(bl)  # Use set to avoid duplicates
 
+        valid_baselines = list(valid_baselines_set)  # Convert to list
         logger.info(
             f"[PRE-FILTER] Result: {len(valid_baselines)} valid, {baselines_skipped} completely flagged"
         )

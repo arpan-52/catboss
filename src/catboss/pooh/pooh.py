@@ -39,7 +39,6 @@ def apply_flags_to_ms(ms_file, bl, field_id, new_flags):
     orig_ds_list = xds_from_ms(ms_file, columns=("FLAG",), taql_where=bl_taql)
 
     if not orig_ds_list or orig_ds_list[0].sizes["row"] == 0:
-        print(f"No data found for baseline {bl} when writing flags. Skipping.")
         return False
 
     try:
@@ -49,8 +48,6 @@ def apply_flags_to_ms(ms_file, bl, field_id, new_flags):
 
         # Ensure new_flags matches the shape of orig_flags
         if orig_flags.shape != new_flags.shape:
-            print(f"Shape mismatch: Original {orig_flags.shape}, New {new_flags.shape}")
-
             # Create properly shaped combined flags
             combined_flags = orig_flags.copy()
 
@@ -89,16 +86,11 @@ def apply_flags_to_ms(ms_file, bl, field_id, new_flags):
         updated_ds = orig_ds.assign(FLAG=(orig_ds.FLAG.dims, new_flags_dask))
 
         # Write back
-        print(f"Writing flags for baseline {bl}...")
         write_back = xds_to_table([updated_ds], ms_file, ["FLAG"])
         dask.compute(write_back)
 
         return True
-    except Exception as e:
-        print(f"Error writing flags for baseline {bl}: {str(e)}")
-        import traceback
-
-        traceback.print_exc()
+    except Exception:
         return False
 
 
@@ -767,30 +759,17 @@ def get_memory_info(logger=None):
         try:
             free_mem, total_mem = cuda.current_context().get_memory_info()
             gpu_usable_mem = free_mem * 0.9  # Use 90% of free memory to be safe
-            if logger:
-                logger.info(
-                    f"   GPU: {total_mem / 1e9:.2f} GB total | {free_mem / 1e9:.2f} GB free | {gpu_usable_mem / 1e9:.2f} GB usable"
-                )
-            else:
-                print(
-                    f"GPU memory: {total_mem / 1e9:.2f} GB (free: {free_mem / 1e9:.2f} GB, usable: {gpu_usable_mem / 1e9:.2f} GB)"
-                )
+            logger.info(
+                f"   GPU: {total_mem / 1e9:.2f} GB total | {free_mem / 1e9:.2f} GB free | {gpu_usable_mem / 1e9:.2f} GB usable"
+            )
         except Exception as e:
-            if logger:
-                logger.warning(
-                    f"Could not determine GPU memory, assuming 8GB: {str(e)}"
-                )
-            else:
-                print(
-                    f"Warning: Could not determine GPU memory, assuming 8GB: {str(e)}"
-                )
+            logger.warning(
+                f"Could not determine GPU memory, assuming 8GB: {str(e)}"
+            )
             gpu_usable_mem = 6 * 1024 * 1024 * 1024 * 0.8  # Assume 8GB, use 80%
     else:
         gpu_usable_mem = 0
-        if logger:
-            logger.info("   No GPU available - using CPU only")
-        else:
-            print("No GPU available")
+        logger.info("   No GPU available - using CPU only")
 
     # Get system memory information
     try:
@@ -800,23 +779,13 @@ def get_memory_info(logger=None):
         system_usable_mem = (
             available_system_mem * 0.6
         )  # Use 60% of available memory (conservative)
-        if logger:
-            logger.info(
-                f"   RAM: {total_system_mem / 1e9:.2f} GB total | {available_system_mem / 1e9:.2f} GB available | {system_usable_mem / 1e9:.2f} GB usable"
-            )
-        else:
-            print(
-                f"System memory: {total_system_mem / 1e9:.2f} GB (available: {available_system_mem / 1e9:.2f} GB, usable: {system_usable_mem / 1e9:.2f} GB)"
-            )
+        logger.info(
+            f"   RAM: {total_system_mem / 1e9:.2f} GB total | {available_system_mem / 1e9:.2f} GB available | {system_usable_mem / 1e9:.2f} GB usable"
+        )
     except Exception as e:
-        if logger:
-            logger.warning(
-                f"Could not determine system memory, assuming 16GB: {str(e)}"
-            )
-        else:
-            print(
-                f"Warning: Could not determine system memory, assuming 16GB: {str(e)}"
-            )
+        logger.warning(
+            f"Could not determine system memory, assuming 16GB: {str(e)}"
+        )
         system_usable_mem = 16 * 1024 * 1024 * 1024 * 0.6  # Assume 16GB, use 60%
 
     return gpu_usable_mem, system_usable_mem
@@ -1009,15 +978,11 @@ def normalize_bandpass_with_polynomial_fit(
     smooth_valid = False
 
     if np.sum(valid_channels) < polynomial_degree + 2:
-        # Not enough valid channels for polynomial fitting
-        print(
-            "Warning: Not enough valid channels for polynomial fitting. Using median filter."
-        )
+        # Not enough valid channels for polynomial fitting - use median filter
         try:
             smooth_bandpass = signal.medfilt(bandpass, kernel_size=15)
             smooth_valid = True
-        except Exception as e:
-            print(f"Median filtering failed: {str(e)}")
+        except Exception:
             smooth_bandpass = bandpass.copy()
     else:
         try:
@@ -1050,8 +1015,7 @@ def normalize_bandpass_with_polynomial_fit(
             # Convert back from log space
             smooth_bandpass = np.power(10, poly_fit)
             smooth_valid = True
-        except Exception as e:
-            print(f"Polynomial fitting failed: {str(e)}")
+        except Exception:
             try:
                 smooth_bandpass = signal.medfilt(bandpass, kernel_size=15)
                 smooth_valid = True
@@ -1544,11 +1508,8 @@ def generate_diagnostic_plot(
         plt.savefig(filename, dpi=80, bbox_inches="tight")
         plt.close()
 
-    except Exception as e:
-        print(f"Error generating diagnostic plot: {str(e)}")
-        import traceback
-
-        traceback.print_exc()
+    except Exception:
+        pass
     finally:
         plt.close("all")
         gc.collect()

@@ -2383,17 +2383,14 @@ def hunt_ms(ms_file, options):
     # Get logger from options
     logger = options.get("logger")
 
-    # Clean up any stale lock files from previous runs
-    import glob
-    lock_files = glob.glob(os.path.join(ms_file, "**/table.lock"), recursive=True)
-    if lock_files:
-        logger.info(f"Found {len(lock_files)} stale lock file(s), removing...")
-        for lock_file in lock_files:
-            try:
-                os.remove(lock_file)
-                logger.debug(f"   Removed: {lock_file}")
-            except Exception as e:
-                logger.warning(f"   Could not remove {lock_file}: {e}")
+    # Clean up stale lock file from previous run (only in MS root, not subdirectories)
+    lock_file = os.path.join(ms_file, "table.lock")
+    if os.path.exists(lock_file):
+        try:
+            os.remove(lock_file)
+            logger.info("Removed stale lock file from MS directory")
+        except Exception as e:
+            logger.warning(f"Could not remove lock file: {e}")
 
     # Create output directory if needed
     if options["diagnostic_plots"]:

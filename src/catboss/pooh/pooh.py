@@ -572,6 +572,7 @@ def sumthreshold_gpu(
     diagnostic_plots=False,
     stream=None,
     precalculated_thresholds=None,
+    logger=None,
 ):
     """
     SumThreshold implementation with integrated bandpass normalization
@@ -587,6 +588,7 @@ def sumthreshold_gpu(
         diagnostic_plots: Whether to generate diagnostic plots
         stream: CUDA stream to use for asynchronous execution (GPU only)
         precalculated_thresholds: Optional pre-calculated thresholds (if None, calculate after bandpass normalization)
+        logger: Logger instance for logging messages
 
     Returns:
         tuple: (flags, baseline_info) where flags is a boolean array of the same shape as amp
@@ -599,9 +601,9 @@ def sumthreshold_gpu(
         # Synchronize before starting
         cuda.synchronize()
 
-    # Print info
-    if baseline_info:
-        print(f"Starting SumThreshold on {baseline_info}")
+    # Log info
+    if baseline_info and logger:
+        logger.debug(f"Starting SumThreshold on {baseline_info}")
 
     # Set default combinations if not provided
     if combinations is None:
@@ -610,8 +612,9 @@ def sumthreshold_gpu(
     if rho is None:
         rho = 1.5
 
-    print(f"Using window sizes: {combinations}")
-    print(f"Using rho value: {rho}")
+    if logger:
+        logger.debug(f"Using window sizes: {combinations}")
+        logger.debug(f"Using rho value: {rho}")
 
     # Create copies of input data for processing
     processed_amp = amp.copy()
@@ -619,7 +622,8 @@ def sumthreshold_gpu(
 
     # Step 1: Apply bandpass normalization only if thresholds are not pre-calculated
     if precalculated_thresholds is None:
-        print("Applying bandpass normalization...")
+        if logger:
+            logger.debug("Applying bandpass normalization...")
 
         if GPU_AVAILABLE:
             # GPU path: Copy data to GPU
@@ -651,13 +655,15 @@ def sumthreshold_gpu(
             bandpass_normalize_cpu(processed_amp, processed_flags, 1.5)
 
         # Calculate thresholds using the normalized data
-        print("Calculating robust channel thresholds...")
+        if logger:
+            logger.debug("Calculating robust channel thresholds...")
         channel_thresholds = calculate_robust_thresholds(
             processed_amp, processed_flags, sigma_factor
         )
     else:
         # Use pre-calculated thresholds (in batch processing mode)
-        print("Using pre-calculated thresholds")
+        if logger:
+            logger.debug("Using pre-calculated thresholds")
         channel_thresholds = precalculated_thresholds
 
     # Process each combination size
@@ -732,7 +738,8 @@ def sumthreshold_gpu(
 
     # Process results and generate statistics
     processing_time = time.time() - start_time
-    print(f"Processing completed in {processing_time:.4f} seconds")
+    if logger:
+        logger.debug(f"Processing completed in {processing_time:.4f} seconds")
 
     # Calculate percentage of newly flagged data
     existing_count = np.sum(existing_flags)
@@ -744,11 +751,12 @@ def sumthreshold_gpu(
         else 0
     )
 
-    print(
-        f"Found {new_flags_count} new flags ({percent_new_flagged:.2f}% of unflagged data) for {baseline_info}"
-    )
-    # Print shape information for debugging
-    print(f"SumThreshold returning flags with shape: {processed_flags.shape}")
+    if logger:
+        logger.debug(
+            f"Found {new_flags_count} new flags ({percent_new_flagged:.2f}% of unflagged data) for {baseline_info}"
+        )
+        # Log shape information for debugging
+        logger.debug(f"SumThreshold returning flags with shape: {processed_flags.shape}")
     return processed_flags, baseline_info
 
 
@@ -814,7 +822,7 @@ def get_memory_info(logger=None):
     return gpu_usable_mem, system_usable_mem
 
 
-def estimate_field_memory_requirements(ms_file, field_id, sample_baseline_count=5):
+def estimate_field_memory_requirements(ms_file, field_id, sample_baseline_count=5, logger=None):
     """
     Estimate memory requirements for processing a single field.
     Samples a few baselines to get accurate estimates.
@@ -845,19 +853,21 @@ def estimate_field_memory_requirements(ms_file, field_id, sample_baseline_count=
         bytes_per_sample = (8 + 1) * n_corr * 4  # 4x multiplier for safety
         total_bytes = n_rows * n_chan * bytes_per_sample
 
-        print(
-            f"Field {field_id} memory estimate: {n_rows} rows × {n_chan} channels × {n_corr} corr = {total_bytes / 1e9:.2f} GB"
-        )
+        if logger:
+            logger.info(
+                f"Field {field_id} memory estimate: {n_rows} rows × {n_chan} channels × {n_corr} corr = {total_bytes / 1e9:.2f} GB"
+            )
 
         return total_bytes
 
     except Exception as e:
-        print(f"Warning: Could not estimate memory for field {field_id}: {str(e)}")
+        if logger:
+            logger.warning(f"Warning: Could not estimate memory for field {field_id}: {str(e)}")
         # Conservative estimate: 30GB per field
         return 30 * 1024 * 1024 * 1024
 
 
-def determine_parallel_field_count(ms_file, field_ids, available_memory):
+def determine_parallel_field_count(ms_file, field_ids, available_memory, logger=None):
     """
     Determine how many fields can be processed in parallel based on available memory.
     """
@@ -865,7 +875,7 @@ def determine_parallel_field_count(ms_file, field_ids, available_memory):
         return 1
 
     # Estimate memory for first field (assume all fields are similar size)
-    field_mem = estimate_field_memory_requirements(ms_file, field_ids[0])
+    field_mem = estimate_field_memory_requirements(ms_file, field_ids[0], logger=logger)
 
     if field_mem == 0:
         return 1
@@ -879,14 +889,15 @@ def determine_parallel_field_count(ms_file, field_ids, available_memory):
     # Cap at reasonable maximum (8 fields) to avoid too many processes
     max_parallel_fields = min(max_parallel_fields, 8)
 
-    print(f"\n{'=' * 60}")
-    print("ADAPTIVE PARALLELIZATION CONFIGURATION")
-    print(f"{'=' * 60}")
-    print(f"Available RAM: {available_memory / 1e9:.2f} GB")
-    print(f"Estimated memory per field: {field_mem / 1e9:.2f} GB")
-    print(f"Total fields to process: {len(field_ids)}")
-    print(f"Fields that will be processed in parallel: {max_parallel_fields}")
-    print(f"{'=' * 60}\n")
+    if logger:
+        logger.info(f"\n{'=' * 60}")
+        logger.info("ADAPTIVE PARALLELIZATION CONFIGURATION")
+        logger.info(f"{'=' * 60}")
+        logger.info(f"Available RAM: {available_memory / 1e9:.2f} GB")
+        logger.info(f"Estimated memory per field: {field_mem / 1e9:.2f} GB")
+        logger.info(f"Total fields to process: {len(field_ids)}")
+        logger.info(f"Fields that will be processed in parallel: {max_parallel_fields}")
+        logger.info(f"{'=' * 60}\n")
 
     return max_parallel_fields
 
@@ -895,9 +906,12 @@ def calculate_baseline_batch_size(
     baseline_data, sample_bl, options, gpu_usable_mem, system_usable_mem
 ):
     """Calculate how many baselines we can process at once based on memory constraints"""
+    # Get logger from options
+    logger = options.get("logger")
+
     # Get a sample baseline to estimate memory requirements
     if sample_bl not in baseline_data:
-        print("Sample baseline not found in data. Cannot estimate memory requirements.")
+        logger.warning("Sample baseline not found in data. Cannot estimate memory requirements.")
         return 1
 
     sample_data = baseline_data[sample_bl]
@@ -939,9 +953,9 @@ def calculate_baseline_batch_size(
     if options.get("diagnostic_plots", False):
         system_mem_per_bl += time_samples * freq_channels * 4 * 4  # 4x for plot buffers
 
-    print("Memory estimates per baseline:")
-    print(f"  - GPU: {gpu_mem_per_bl / (1024 * 1024):.2f} MB")
-    print(f"  - System: {system_mem_per_bl / (1024 * 1024):.2f} MB")
+    logger.info("Memory estimates per baseline:")
+    logger.info(f"  - GPU: {gpu_mem_per_bl / (1024 * 1024):.2f} MB")
+    logger.info(f"  - System: {system_mem_per_bl / (1024 * 1024):.2f} MB")
 
     # Calculate how many baselines can fit in GPU memory
     gpu_bl_limit = max(1, int(gpu_usable_mem // gpu_mem_per_bl))
@@ -952,10 +966,10 @@ def calculate_baseline_batch_size(
     # Take the minimum of the two limits
     bl_batch_size = min(gpu_bl_limit, system_bl_limit)
 
-    print("Based on memory constraints:")
-    print(f"  - GPU limit: {gpu_bl_limit} baselines")
-    print(f"  - System memory limit: {system_bl_limit} baselines")
-    print(f"  - Selected batch size: {bl_batch_size} baselines")
+    logger.info("Based on memory constraints:")
+    logger.info(f"  - GPU limit: {gpu_bl_limit} baselines")
+    logger.info(f"  - System memory limit: {system_bl_limit} baselines")
+    logger.info(f"  - Selected batch size: {bl_batch_size} baselines")
 
     # # Add a fixed upper limit to be safe
     # max_batch_size = 20
@@ -1080,6 +1094,9 @@ def process_baselines_batch_gpu(
     Returns:
         dict: Dictionary mapping baselines to processed flag results
     """
+    # Get logger from options
+    logger = options.get("logger")
+
     total_start_time = time.time()
 
     # Create a main CUDA stream if GPU available
@@ -1091,7 +1108,7 @@ def process_baselines_batch_gpu(
 
     # Extract baselines to process
     baselines = list(baseline_data.keys())
-    print(
+    logger.info(
         f"Processing batch of {len(baselines)} baselines with optimized GPU transfers..."
     )
 
@@ -1106,12 +1123,12 @@ def process_baselines_batch_gpu(
     deviation_threshold = options.get("deviation_threshold", 3.0)
 
     # Pre-calculate thresholds for all baselines
-    print("Normalizing and pre-calculating thresholds for all baselines...")
+    logger.info("Normalizing and pre-calculating thresholds for all baselines...")
     threshold_arrays = {}
 
     # Use multiple threads for bandpass processing
     max_workers = min(options.get("max_threads", 16), len(baselines))
-    print(f"Using {max_workers} threads for parallel bandpass processing")
+    logger.info(f"Using {max_workers} threads for parallel bandpass processing")
 
     # Function to process a single baseline for bandpass normalization
     def process_baseline_bandpass(bl):
@@ -1153,11 +1170,12 @@ def process_baselines_batch_gpu(
                 )
             )
 
-            # Print RFI detection results
+            # Log RFI detection results
             rfi_count = np.sum(rfi_channels)
-            print(
-                f"Detected {rfi_count} RFI channels in baseline {bl[0]}-{bl[1]} (combined pols)"
-            )
+            if options.get("verbose"):
+                logger.debug(
+                    f"Detected {rfi_count} RFI channels in baseline {bl[0]}-{bl[1]} (combined pols)"
+                )
 
             # Apply bandpass normalization and flagging - OPTIMIZED
             normalized_amp = vis_amp.copy()
@@ -1202,11 +1220,12 @@ def process_baselines_batch_gpu(
                     )
                 )
 
-                # Print RFI detection results
+                # Log RFI detection results
                 rfi_count = np.sum(rfi_channels)
-                print(
-                    f"Detected {rfi_count} RFI channels in baseline {bl[0]}-{bl[1]}, pol {corr_idx}"
-                )
+                if options.get("verbose"):
+                    logger.debug(
+                        f"Detected {rfi_count} RFI channels in baseline {bl[0]}-{bl[1]}, pol {corr_idx}"
+                    )
 
                 # Apply bandpass normalization and flagging - OPTIMIZED
                 normalized_amp = vis_amp.copy()
@@ -1255,7 +1274,7 @@ def process_baselines_batch_gpu(
                 # Add to threshold_arrays
                 threshold_arrays.update(bl_results)
             except Exception as e:
-                print(f"Error processing baseline {bl}: {str(e)}")
+                logger.error(f"Error processing baseline {bl}: {str(e)}")
                 import traceback
 
                 traceback.print_exc()
@@ -1300,6 +1319,7 @@ def process_baselines_batch_gpu(
             diagnostic_plots=False,
             stream=stream,
             precalculated_thresholds=base_thresholds,
+            logger=logger,
         )
 
         # Combine with existing flags
@@ -1378,7 +1398,7 @@ def process_baselines_batch_gpu(
 
     # Generate diagnostic plots after processing
     if options["diagnostic_plots"] and diagnostic_data:
-        print(f"Generating {len(diagnostic_data)} diagnostic plots...")
+        logger.info(f"Generating {len(diagnostic_data)} diagnostic plots...")
         output_dir = options.get("output_dir", "outputs")
         os.makedirs(output_dir, exist_ok=True)
 
@@ -1395,7 +1415,7 @@ def process_baselines_batch_gpu(
             )
 
     total_time = time.time() - total_start_time
-    print(f"Batch processing completed in {total_time:.2f} seconds")
+    logger.info(f"Batch processing completed in {total_time:.2f} seconds")
 
     return results
 
@@ -1548,6 +1568,8 @@ def process_baseline_async(
     output_dir="outputs",
 ):
     """Process a single baseline or chunk asynchronously"""
+    # Get logger from options
+    logger = options.get("logger")
 
     # Initialize time axis
     time_axis = np.arange(bl_data.sizes["row"])
@@ -1591,7 +1613,7 @@ def process_baseline_async(
         # Skip if all flagged
         if np.all(existing_flags):
             if options["verbose"]:
-                print(
+                logger.debug(
                     f"All data already flagged for baseline {bl} corr {corr_idx} {chunk_info}. Skipping."
                 )
             if options["apply_flags"]:
@@ -1608,6 +1630,7 @@ def process_baseline_async(
             rho=options["rho"],
             diagnostic_plots=False,
             stream=stream,
+            logger=logger,
         )
 
         # Combine flags
@@ -1662,7 +1685,7 @@ def process_baseline_async(
         # Skip if all flagged
         if np.all(existing_flags_combined):
             if options["verbose"]:
-                print(
+                logger.debug(
                     f"All data already flagged for baseline {bl} combined corrs {chunk_info}. Skipping."
                 )
             if options["apply_flags"]:
@@ -1680,6 +1703,7 @@ def process_baseline_async(
             rho=options["rho"],
             diagnostic_plots=False,
             stream=stream,
+            logger=logger,
         )
 
         # Combine flags
@@ -1723,7 +1747,7 @@ def process_baseline_async(
             # Skip if all flagged
             if np.all(existing_flags):
                 if options["verbose"]:
-                    print(
+                    logger.debug(
                         f"All data already flagged for baseline {bl} corr {corr_idx} {chunk_info}. Skipping."
                     )
                 if options["apply_flags"]:
@@ -1740,6 +1764,7 @@ def process_baseline_async(
                 rho=options["rho"],
                 diagnostic_plots=False,
                 stream=stream,
+                logger=logger,
             )
 
             # Combine flags
@@ -1797,6 +1822,9 @@ def process_single_field(
     Process a single field independently. Can be called via multiprocessing.
     Returns statistics dictionary.
     """
+    # Get logger from options
+    logger = options.get("logger")
+
     # Initialize field statistics
     total_flagged = 0
     total_new_flags = 0
@@ -1807,10 +1835,10 @@ def process_single_field(
     # Get chunk size from options (user-configurable)
     chunk_size = options.get("chunk_size", 200000)
 
-    print(f"\n*** Processing Field {field_id} ***")
+    logger.info(f"\n*** Processing Field {field_id} ***")
 
     # Get unique baselines for this field
-    print(f"Getting unique baselines for field {field_id}...")
+    logger.info(f"Getting unique baselines for field {field_id}...")
     baselines = set()
 
     # Read antenna pairs with configurable chunk size
@@ -1829,11 +1857,11 @@ def process_single_field(
             baselines.add((a1, a2))
 
     baselines = list(baselines)
-    print(f"Found {len(baselines)} unique baselines in field {field_id}")
+    logger.info(f"Found {len(baselines)} unique baselines in field {field_id}")
 
     # Skip if no baselines
     if not baselines:
-        print(f"No baselines found for field {field_id}. Skipping.")
+        logger.warning(f"No baselines found for field {field_id}. Skipping.")
         return {
             "total_flagged": total_flagged,
             "total_new_flags": total_new_flags,
@@ -1852,7 +1880,7 @@ def process_single_field(
         sample_ds = xds_from_ms(ms_file, columns=("DATA",), taql_where=sample_taql)[0]
 
         if sample_ds.sizes["row"] == 0:
-            print(f"No data found for sample baseline {sample_bl}. Skipping field.")
+            logger.warning(f"No data found for sample baseline {sample_bl}. Skipping field.")
             return {
                 "total_flagged": total_flagged,
                 "total_new_flags": total_new_flags,
@@ -1863,13 +1891,13 @@ def process_single_field(
 
         data_shape = sample_ds.DATA.shape
     except Exception as e:
-        print(f"Error reading sample baseline: {str(e)}")
+        logger.error(f"Error reading sample baseline: {str(e)}")
         try:
             # Try simpler read
             simple_ds = xds_from_ms(ms_file, columns=("DATA",))[0]
             data_shape = simple_ds.DATA.shape
         except Exception as e2:
-            print(f"Could not determine data shape: {str(e2)}")
+            logger.error(f"Could not determine data shape: {str(e2)}")
             return {
                 "total_flagged": total_flagged,
                 "total_new_flags": total_new_flags,
@@ -1878,11 +1906,11 @@ def process_single_field(
                 "baselines_skipped": baselines_skipped,
             }
 
-    print(f"Data shape: {data_shape}")
+    logger.info(f"Data shape: {data_shape}")
 
     # Get number of correlations
     n_corr = data_shape[2]
-    print(f"Number of correlations: {n_corr}")
+    logger.info(f"Number of correlations: {n_corr}")
 
     # Determine correlations to process
     corr_to_process = options["corr_to_process"]
@@ -1890,23 +1918,23 @@ def process_single_field(
         # Default to first and last for Stokes I
         if n_corr >= 2:
             corr_to_process = [0, n_corr - 1]
-            print(f"Processing correlations 0 and {n_corr - 1} (default)")
+            logger.info(f"Processing correlations 0 and {n_corr - 1} (default)")
         else:
             corr_to_process = [0]
-            print("Processing correlation 0 (default)")
+            logger.info("Processing correlation 0 (default)")
     else:
-        print(f"Processing correlations: {corr_to_process}")
+        logger.info(f"Processing correlations: {corr_to_process}")
 
     # Calculate ideal batch size
     time_samples = sample_ds.sizes["row"]
     freq_channels = data_shape[1]
 
-    print(
+    logger.info(
         f"Typical baseline has {time_samples} time samples × {freq_channels} frequency channels"
     )
 
     # PRE-FILTER: Check which baselines are completely flagged (load only FLAG, not DATA)
-    print(f"\n[PRE-FILTER] Checking flag status for {len(baselines)} baselines...")
+    logger.info(f"\n[PRE-FILTER] Checking flag status for {len(baselines)} baselines...")
     valid_baselines = []
     baseline_flag_map = {}  # Map baseline -> is_completely_flagged
 
@@ -1948,31 +1976,31 @@ def process_single_field(
 
                 if is_completely_flagged:
                     if options["verbose"]:
-                        print(f"  Baseline {bl}: 100% flagged - SKIP")
+                        logger.debug(f"  Baseline {bl}: 100% flagged - SKIP")
                     baselines_skipped += 1
                 else:
                     if options["verbose"]:
                         percent_flagged = (
                             100 * np.sum(combined_flags) / combined_flags.size
                         )
-                        print(
+                        logger.debug(
                             f"  Baseline {bl}: {percent_flagged:.1f}% flagged - PROCESS"
                         )
                     valid_baselines.append(bl)
 
-        print(
+        logger.info(
             f"[PRE-FILTER] Result: {len(valid_baselines)} valid, {baselines_skipped} completely flagged"
         )
 
     except Exception as e:
-        print(
+        logger.warning(
             f"[PRE-FILTER] Warning: Pre-filter failed ({str(e)}), processing all baselines"
         )
         valid_baselines = baselines  # Fall back to processing all
 
     # Skip if no valid baselines
     if not valid_baselines:
-        print(f"No valid baselines to process in field {field_id}.")
+        logger.warning(f"No valid baselines to process in field {field_id}.")
         return {
             "total_flagged": total_flagged,
             "total_new_flags": total_new_flags,
@@ -1998,7 +2026,7 @@ def process_single_field(
                 batch = valid_baselines[i : i + bl_per_batch]
                 batch_size = len(batch)
 
-                print(
+                logger.info(
                     f"\nProcessing batch {i // bl_per_batch + 1}/{(len(valid_baselines) + bl_per_batch - 1) // bl_per_batch}: {batch_size} baselines"
                 )
 
@@ -2048,7 +2076,7 @@ def process_single_field(
                 for bl in batch:
                     if bl not in baseline_data or not baseline_data[bl]["data"]:
                         if options["verbose"]:
-                            print(f"No data found for baseline {bl}. Skipping.")
+                            logger.debug(f"No data found for baseline {bl}. Skipping.")
                         baselines_skipped += 1
                         continue
 
@@ -2100,7 +2128,7 @@ def process_single_field(
 
                             baselines_processed += 1
                         except Exception as e:
-                            print(
+                            logger.error(
                                 f"Error processing results for baseline {bl}: {str(e)}"
                             )
                             if options["verbose"]:
@@ -2115,7 +2143,8 @@ def process_single_field(
                     try:
                         # Process each baseline separately
                         for bl in batch_results.keys():
-                            print(f"Writing flags for baseline {bl}...")
+                            if options["verbose"]:
+                                logger.debug(f"Writing flags for baseline {bl}...")
 
                             # Create baseline-specific query
                             bl_taql = f"FIELD_ID={field_id} AND ANTENNA1={bl[0]} AND ANTENNA2={bl[1]}"
@@ -2128,7 +2157,7 @@ def process_single_field(
                             )
 
                             if not orig_ds_list or orig_ds_list[0].sizes["row"] == 0:
-                                print(f"No data found for baseline {bl}. Skipping.")
+                                logger.warning(f"No data found for baseline {bl}. Skipping.")
                                 continue
 
                             # Get original dataset and flags
@@ -2194,12 +2223,12 @@ def process_single_field(
                             gc.collect()
 
                     except Exception as e:
-                        print(f"Error writing flags: {str(e)}")
+                        logger.error(f"Error writing flags: {str(e)}")
                         import traceback
 
                         traceback.print_exc()
                 else:
-                    print("No valid baselines found in this batch. Skipping.")
+                    logger.warning("No valid baselines found in this batch. Skipping.")
 
                 # Clean up
                 batch_ds_list = None
@@ -2218,14 +2247,14 @@ def process_single_field(
             raise ValueError("Forcing single baseline processing")
     except Exception as e:
         # Fall back to single baseline processing
-        print(
+        logger.info(
             f"Batch processing failed: {str(e)}. Falling back to single baseline processing."
         )
 
         # Process each baseline
         for bl_idx, bl in enumerate(tqdm(valid_baselines, desc="Baselines")):
             if options["verbose"]:
-                print(
+                logger.debug(
                     f"\nProcessing baseline {bl_idx + 1}/{len(valid_baselines)}: Antennas {bl[0]}-{bl[1]}"
                 )
 
@@ -2242,7 +2271,7 @@ def process_single_field(
                 # Skip if no data
                 if not bl_ds_list or bl_ds_list[0].sizes["row"] == 0:
                     if options["verbose"]:
-                        print(f"No data found for baseline {bl}. Skipping.")
+                        logger.debug(f"No data found for baseline {bl}. Skipping.")
                     baselines_skipped += 1
                     continue
 
@@ -2304,9 +2333,10 @@ def process_single_field(
                             # Combine flags
                             orig_flags_array = orig_ds.FLAG.data.compute()
                             if len(orig_flags_array.shape) != len(all_flags.shape):
-                                print(
-                                    f"Handling dimension mismatch. Original: {orig_flags_array.shape}, New: {all_flags.shape}"
-                                )
+                                if options["verbose"]:
+                                    logger.debug(
+                                        f"Handling dimension mismatch. Original: {orig_flags_array.shape}, New: {all_flags.shape}"
+                                    )
 
                                 # Create a properly sized output array
                                 combined_flags = np.copy(orig_flags_array)
@@ -2322,7 +2352,7 @@ def process_single_field(
                                             orig_flags_array[:, :, corr_idx], all_flags
                                         )
                                 else:
-                                    print(
+                                    logger.warning(
                                         "Unexpected dimension mismatch. Using original flags."
                                     )
                                     combined_flags = orig_flags_array
@@ -2343,11 +2373,12 @@ def process_single_field(
                             )
 
                             # Write back
-                            print(f"Writing flags for baseline {bl}...")
+                            if options["verbose"]:
+                                logger.debug(f"Writing flags for baseline {bl}...")
                             write_back = xds_to_table([updated_ds], ms_file, ["FLAG"])
                             dask.compute(write_back)
                     except Exception as e:
-                        print(f"Error writing flags for baseline {bl}: {str(e)}")
+                        logger.error(f"Error writing flags for baseline {bl}: {str(e)}")
                         import traceback
 
                         traceback.print_exc()
@@ -2368,7 +2399,7 @@ def process_single_field(
                     cuda.synchronize()
 
             except Exception as e:
-                print(f"Error processing baseline {bl}: {str(e)}")
+                logger.error(f"Error processing baseline {bl}: {str(e)}")
                 if options["verbose"]:
                     import traceback
 
@@ -2441,24 +2472,24 @@ def hunt_ms(ms_file, options):
 
     # Determine if we can process fields in parallel (informational)
     parallel_fields = determine_parallel_field_count(
-        ms_file, field_ids, system_usable_mem
+        ms_file, field_ids, system_usable_mem, logger=logger
     )
 
     # FIELD-LEVEL PARALLELIZATION
     if parallel_fields > 1 and len(field_ids) > 1:
-        print(f"\n[PARALLEL MODE] Processing {parallel_fields} fields simultaneously")
-        print(f"[PARALLEL MODE] Worker processes: {parallel_fields}\n")
+        logger.info(f"\n[PARALLEL MODE] Processing {parallel_fields} fields simultaneously")
+        logger.info(f"[PARALLEL MODE] Worker processes: {parallel_fields}\n")
 
         from multiprocessing import Pool
 
         # Process in batches
         for batch_start in range(0, len(field_ids), parallel_fields):
             batch_ids = field_ids[batch_start : batch_start + parallel_fields]
-            print(f"\n{'=' * 70}")
-            print(
+            logger.info(f"\n{'=' * 70}")
+            logger.info(
                 f"Batch {batch_start // parallel_fields + 1}: Processing fields {batch_ids}"
             )
-            print(f"{'=' * 70}\n")
+            logger.info(f"{'=' * 70}\n")
 
             args_list = [
                 (ms_file, fid, options, freq_axis, gpu_usable_mem, system_usable_mem)
@@ -2476,7 +2507,7 @@ def hunt_ms(ms_file, options):
                 baselines_processed += stats["baselines_processed"]
                 baselines_skipped += stats["baselines_skipped"]
     else:
-        print(f"\n[SEQUENTIAL MODE] Processing {len(field_ids)} field(s)\n")
+        logger.info(f"\n[SEQUENTIAL MODE] Processing {len(field_ids)} field(s)\n")
         for field_id in field_ids:
             stats = process_single_field(
                 ms_file, field_id, options, freq_axis, gpu_usable_mem, system_usable_mem

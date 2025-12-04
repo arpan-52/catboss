@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "catboss"
+version = "0.1.0"
+description = "A suite of radio astronomy flagging tools"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Arpan Pal", email = "arpan522000@gmail.com"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+    "dask",
+    "dask-ms",
+    "matplotlib",
+    "numba",
+    "numpy>=1.20.0",
+    "psutil",
+    "tqdm",
+    "xarray",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourname/catboss"
+
+[project.scripts]
+catboss = "catboss.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

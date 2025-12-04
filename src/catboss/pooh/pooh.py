@@ -1776,15 +1776,73 @@ def process_baseline_async(
     return combined_flags, existing_flag_count, new_flag_count
 
 
+def preload_field_data(ms_file, field_id, baselines, chunk_size, logger):
+    """
+    Pre-load all DATA and FLAG information for a field into memory.
+    This avoids MS locking issues during parallel processing.
+
+    Returns:
+        dict: {baseline: {'data': np.array, 'flags': np.array, 'row_indices': list}}
+    """
+    logger.info(f"  Pre-loading data for field {field_id} ({len(baselines)} baselines)...")
+
+    # Build query for all baselines
+    baseline_clauses = []
+    for ant1, ant2 in baselines:
+        baseline_clauses.append(f"(ANTENNA1={ant1} AND ANTENNA2={ant2})")
+
+    taql_where = f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
+
+    # Read data
+    ds_list = xds_from_ms(
+        ms_file,
+        columns=("DATA", "FLAG", "ANTENNA1", "ANTENNA2"),
+        taql_where=taql_where,
+        chunks={"row": chunk_size},
+    )
+
+    # Materialize and organize by baseline
+    field_data = {}
+
+    for ds in ds_list:
+        # Materialize all data at once
+        ant1, ant2, data, flags = dask.compute(
+            ds.ANTENNA1.data, ds.ANTENNA2.data, ds.DATA.data, ds.FLAG.data
+        )
+
+        # Group by baseline
+        for i, (a1, a2) in enumerate(zip(ant1, ant2)):
+            bl = (a1, a2)
+
+            if bl not in baselines:
+                continue
+
+            if bl not in field_data:
+                field_data[bl] = {"data": [], "flags": [], "row_indices": []}
+
+            field_data[bl]["data"].append(data[i])
+            field_data[bl]["flags"].append(flags[i])
+            field_data[bl]["row_indices"].append(i)
+
+    # Concatenate arrays for each baseline
+    for bl in field_data:
+        field_data[bl]["data"] = np.concatenate(field_data[bl]["data"], axis=0)
+        field_data[bl]["flags"] = np.concatenate(field_data[bl]["flags"], axis=0)
+
+    logger.debug(f"    Pre-loaded {len(field_data)} baselines for field {field_id}")
+    return field_data
+
+
 def process_single_field(
-    ms_file, field_id, options, freq_axis, gpu_usable_mem, system_usable_mem, preloaded_baselines=None
+    ms_file, field_id, options, freq_axis, gpu_usable_mem, system_usable_mem, preloaded_baselines=None, preloaded_data=None
 ):
     """
     Process a single field independently. Can be called via multiprocessing.
-    Returns statistics dictionary.
+    Returns statistics dictionary and modified flags if preloaded_data is provided.
 
     Args:
         preloaded_baselines: Optional list of (ant1, ant2) tuples. If provided, skips baseline discovery.
+        preloaded_data: Optional dict of {baseline: {'data': array, 'flags': array}}. If provided, skips MS reading.
     """
     # Get logger from options
     logger = options.get("logger")
@@ -1901,60 +1959,84 @@ def process_single_field(
         f"Typical baseline has {time_samples} time samples × {freq_channels} frequency channels"
     )
 
-    # PRE-FILTER: Check which baselines are completely flagged (load only FLAG, not DATA)
+    # PRE-FILTER: Check which baselines are completely flagged
     logger.info(f"\n[PRE-FILTER] Checking flag status for {len(baselines)} baselines...")
     valid_baselines_set = set()  # Use set to avoid duplicates
     baseline_flag_map = {}  # Map baseline -> is_completely_flagged
 
-    # Build query for all baselines at once
-    baseline_clauses = []
-    for ant1, ant2 in baselines:
-        baseline_clauses.append(f"(ANTENNA1={ant1} AND ANTENNA2={ant2})")
-
-    taql_where_all = f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
-
     try:
-        # Read only FLAG column for all baselines with configurable chunks
-        flag_ds_list = xds_from_ms(
-            ms_file,
-            columns=("FLAG", "ANTENNA1", "ANTENNA2"),
-            taql_where=taql_where_all,
-            chunks={"row": chunk_size},
-        )
+        if preloaded_data is not None:
+            # Use preloaded data for pre-filtering
+            logger.debug("  Using pre-loaded data for pre-filter check")
+            for bl in baselines:
+                if bl in preloaded_data:
+                    flags = preloaded_data[bl]["flags"]
+                    is_completely_flagged = np.all(flags)
+                    baseline_flag_map[bl] = is_completely_flagged
 
-        # Check each baseline
-        for ds in flag_ds_list:
-            ant1, ant2, flags = dask.compute(
-                ds.ANTENNA1.data, ds.ANTENNA2.data, ds.FLAG.data
+                    if is_completely_flagged:
+                        if options["verbose"]:
+                            logger.debug(f"  Baseline {bl}: 100% flagged - SKIP")
+                        baselines_skipped += 1
+                    else:
+                        if options["verbose"]:
+                            percent_flagged = 100 * np.sum(flags) / flags.size
+                            logger.debug(
+                                f"  Baseline {bl}: {percent_flagged:.1f}% flagged - PROCESS"
+                            )
+                        valid_baselines_set.add(bl)
+                else:
+                    logger.warning(f"  Baseline {bl} not found in preloaded data, skipping")
+                    baselines_skipped += 1
+        else:
+            # Read from MS for pre-filtering
+            baseline_clauses = []
+            for ant1, ant2 in baselines:
+                baseline_clauses.append(f"(ANTENNA1={ant1} AND ANTENNA2={ant2})")
+
+            taql_where_all = f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
+
+            # Read only FLAG column for all baselines with configurable chunks
+            flag_ds_list = xds_from_ms(
+                ms_file,
+                columns=("FLAG", "ANTENNA1", "ANTENNA2"),
+                taql_where=taql_where_all,
+                chunks={"row": chunk_size},
             )
 
-            # Group by baseline
-            baseline_flags = {}
-            for i, (a1, a2) in enumerate(zip(ant1, ant2)):
-                bl = (a1, a2)
-                if bl not in baseline_flags:
-                    baseline_flags[bl] = []
-                baseline_flags[bl].append(flags[i])
+            # Check each baseline
+            for ds in flag_ds_list:
+                ant1, ant2, flags = dask.compute(
+                    ds.ANTENNA1.data, ds.ANTENNA2.data, ds.FLAG.data
+                )
 
-            # Check if completely flagged
-            for bl, flag_list in baseline_flags.items():
-                combined_flags = np.concatenate(flag_list, axis=0)
-                is_completely_flagged = np.all(combined_flags)
-                baseline_flag_map[bl] = is_completely_flagged
+                # Group by baseline
+                baseline_flags = {}
+                for i, (a1, a2) in enumerate(zip(ant1, ant2)):
+                    bl = (a1, a2)
+                    if bl not in baseline_flags:
+                        baseline_flags[bl] = []
+                    baseline_flags[bl].append(flags[i])
 
-                if is_completely_flagged:
-                    if options["verbose"]:
-                        logger.debug(f"  Baseline {bl}: 100% flagged - SKIP")
-                    baselines_skipped += 1
-                else:
-                    if options["verbose"]:
-                        percent_flagged = (
-                            100 * np.sum(combined_flags) / combined_flags.size
-                        )
-                        logger.debug(
-                            f"  Baseline {bl}: {percent_flagged:.1f}% flagged - PROCESS"
-                        )
-                    valid_baselines_set.add(bl)  # Use set to avoid duplicates
+                # Check if completely flagged
+                for bl, flag_list in baseline_flags.items():
+                    combined_flags = np.concatenate(flag_list, axis=0)
+                    is_completely_flagged = np.all(combined_flags)
+                    baseline_flag_map[bl] = is_completely_flagged
+
+                    if is_completely_flagged:
+                        if options["verbose"]:
+                            logger.debug(f"  Baseline {bl}: 100% flagged - SKIP")
+                        baselines_skipped += 1
+                    else:
+                        if options["verbose"]:
+                            percent_flagged = (
+                                100 * np.sum(combined_flags) / combined_flags.size
+                            )
+                            logger.debug(
+                                f"  Baseline {bl}: {percent_flagged:.1f}% flagged - PROCESS"
+                            )
+                        valid_baselines_set.add(bl)  # Use set to avoid duplicates
 
         valid_baselines = list(valid_baselines_set)  # Convert to list
         logger.info(
@@ -1977,6 +2059,74 @@ def process_single_field(
             "baselines_processed": baselines_processed,
             "baselines_skipped": baselines_skipped,
         }
+
+    # ================================================================
+    # PRELOADED DATA PATH - Process without MS access
+    # ================================================================
+    if preloaded_data is not None:
+        logger.info(f"\nProcessing {len(valid_baselines)} baselines using pre-loaded data (no MS access)")
+
+        # Will store modified flags to return to main process
+        modified_flags_by_baseline = {}
+
+        for bl_idx, bl in enumerate(valid_baselines):
+            try:
+                if bl not in preloaded_data:
+                    logger.warning(f"Baseline {bl} not in preloaded data, skipping")
+                    baselines_skipped += 1
+                    continue
+
+                bl_data = preloaded_data[bl]["data"]
+                bl_flags = preloaded_data[bl]["flags"]
+
+                logger.info(f"\n[{bl_idx + 1}/{len(valid_baselines)}] Processing baseline {bl}")
+                logger.info(f"  Data shape: {bl_data.shape}, Flags shape: {bl_flags.shape}")
+
+                # Process this baseline with RFI detection
+                new_flags, existing_count, new_count = apply_rfi_detection(
+                    bl_data,
+                    bl_flags,
+                    options,
+                    freq_axis,
+                    logger,
+                    gpu_usable_mem,
+                    system_usable_mem,
+                    corr_to_process,
+                )
+
+                # Store modified flags
+                modified_flags_by_baseline[bl] = new_flags
+
+                # Update statistics
+                total_flagged += existing_count + new_count
+                total_new_flags += new_count
+                total_visibilities += bl_data.size
+                baselines_processed += 1
+
+                logger.info(f"  Existing flags: {existing_count}, New flags: {new_count}")
+
+            except Exception as e:
+                logger.error(f"Error processing baseline {bl}: {str(e)}")
+                if options["verbose"]:
+                    import traceback
+                    traceback.print_exc()
+                baselines_skipped += 1
+                continue
+
+        # Return statistics and modified flags
+        return {
+            "total_flagged": total_flagged,
+            "total_new_flags": total_new_flags,
+            "total_visibilities": total_visibilities,
+            "baselines_processed": baselines_processed,
+            "baselines_skipped": baselines_skipped,
+            "modified_flags": modified_flags_by_baseline,  # NEW: return flags for writing
+            "field_id": field_id,  # NEW: for writing back
+        }
+
+    # ================================================================
+    # STANDARD PATH - Read from MS and write back
+    # ================================================================
 
     # Process baselines in batches where possible
     baseline_data = {}  # Dictionary to store baseline data
@@ -2453,13 +2603,24 @@ def hunt_ms(ms_file, options):
         ms_file, field_ids, system_usable_mem, logger=logger
     )
 
-    # PRE-LOAD: Discover baselines for all fields BEFORE parallelization
-    # This avoids MS locking issues when workers try to discover baselines simultaneously
+    # PRE-LOAD: Read ALL data (baselines + DATA + FLAG) for all fields BEFORE parallelization
+    # This completely avoids MS locking issues during parallel processing
+    field_baselines = {}
+    field_data_cache = {}
+    chunk_size = options.get("chunk_size", 200000)
+
     if parallel_fields > 1 and len(field_ids) > 1:
-        logger.info("\nPre-loading baseline information for parallel processing...")
-        field_baselines = {}
+        logger.info("\n" + "=" * 70)
+        logger.info("PRE-LOADING ALL FIELD DATA FOR PARALLEL PROCESSING")
+        logger.info("=" * 70)
+        logger.info("Reading baselines, DATA, and FLAG columns for all fields...")
+        logger.info("Workers will process without any MS access (no locking issues)\n")
+
         for field_id in field_ids:
             try:
+                logger.info(f"Field {field_id}:")
+                # First, discover baselines
+                logger.info(f"  Discovering baselines...")
                 taql_where = f"FIELD_ID={field_id}"
                 ds_list = xds_from_ms(
                     ms_file,
@@ -2471,14 +2632,28 @@ def hunt_ms(ms_file, options):
                     ant1, ant2 = dask.compute(ds_list[0].ANTENNA1.data, ds_list[0].ANTENNA2.data)
                     baselines = list(set(zip(ant1, ant2)))
                     field_baselines[field_id] = baselines
-                    logger.debug(f"   Field {field_id}: {len(baselines)} baselines")
+                    logger.info(f"    Found {len(baselines)} baselines")
+
+                    # Now pre-load all DATA and FLAG for this field
+                    field_data = preload_field_data(ms_file, field_id, baselines, chunk_size, logger)
+                    field_data_cache[field_id] = field_data
+                    logger.info(f"    ✓ Pre-loaded data for {len(field_data)} baselines\n")
                 else:
                     field_baselines[field_id] = []
+                    field_data_cache[field_id] = {}
+                    logger.warning(f"    No data found for field {field_id}\n")
             except Exception as e:
-                logger.warning(f"   Could not pre-load baselines for field {field_id}: {e}")
+                logger.warning(f"   Could not pre-load field {field_id}: {e}\n")
                 field_baselines[field_id] = []
+                field_data_cache[field_id] = {}
+
+        logger.info("=" * 70)
+        logger.info("PRE-LOADING COMPLETE - Ready for parallel processing")
+        logger.info("=" * 70 + "\n")
     else:
+        # No pre-loading for sequential mode
         field_baselines = None
+        field_data_cache = None
 
     # FIELD-LEVEL PARALLELIZATION
     if parallel_fields > 1 and len(field_ids) > 1:
@@ -2497,26 +2672,62 @@ def hunt_ms(ms_file, options):
             logger.info(f"{'=' * 70}\n")
 
             args_list = [
-                (ms_file, fid, options, freq_axis, gpu_usable_mem, system_usable_mem, field_baselines.get(fid))
+                (ms_file, fid, options, freq_axis, gpu_usable_mem, system_usable_mem,
+                 field_baselines.get(fid), field_data_cache.get(fid))
                 for fid in batch_ids
             ]
 
             with Pool(processes=len(batch_ids)) as pool:
                 batch_results = pool.starmap(process_single_field, args_list)
 
-            # Aggregate
+            # Aggregate statistics and collect flags for writing
             for stats in batch_results:
                 total_flagged += stats["total_flagged"]
                 total_new_flags += stats["total_new_flags"]
                 total_visibilities += stats["total_visibilities"]
                 baselines_processed += stats["baselines_processed"]
                 baselines_skipped += stats["baselines_skipped"]
+
+                # If modified_flags are returned (preloaded data mode), write them back
+                if "modified_flags" in stats:
+                    field_id = stats["field_id"]
+                    modified_flags = stats["modified_flags"]
+                    logger.info(f"\nWriting flags back to MS for field {field_id}...")
+
+                    try:
+                        for bl, new_flags in modified_flags.items():
+                            # Read original dataset for this baseline
+                            taql_where = f"FIELD_ID={field_id} AND ANTENNA1={bl[0]} AND ANTENNA2={bl[1]}"
+                            orig_ds_list = xds_from_ms(ms_file, columns=("FLAG",), taql_where=taql_where)
+
+                            if not orig_ds_list:
+                                logger.warning(f"  Could not find dataset for baseline {bl}")
+                                continue
+
+                            orig_ds = orig_ds_list[0]
+
+                            # Create dask array from new flags
+                            new_flags_dask = dask.array.from_array(new_flags, chunks=orig_ds.FLAG.chunks)
+
+                            # Update dataset
+                            updated_ds = orig_ds.assign(FLAG=(orig_ds.FLAG.dims, new_flags_dask))
+
+                            # Write back
+                            write_back = xds_to_table([updated_ds], ms_file, ["FLAG"])
+                            dask.compute(write_back)
+
+                        logger.info(f"  ✓ Wrote flags for {len(modified_flags)} baselines")
+                    except Exception as e:
+                        logger.error(f"  Error writing flags for field {field_id}: {e}")
+                        import traceback
+                        traceback.print_exc()
     else:
         logger.info(f"\n[SEQUENTIAL MODE] Processing {len(field_ids)} field(s)\n")
         for field_id in field_ids:
             stats = process_single_field(
                 ms_file, field_id, options, freq_axis, gpu_usable_mem, system_usable_mem,
-                field_baselines.get(field_id) if field_baselines else None
+                field_baselines.get(field_id) if field_baselines else None,
+                field_data_cache.get(field_id) if field_data_cache else None
             )
             total_flagged += stats["total_flagged"]
             total_new_flags += stats["total_new_flags"]

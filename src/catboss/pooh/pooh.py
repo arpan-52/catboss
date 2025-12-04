@@ -2603,6 +2603,11 @@ def hunt_ms(ms_file, options):
         ms_file, field_ids, system_usable_mem, logger=logger
     )
 
+    # DISABLE parallel field processing to avoid MS locking issues
+    # Process all fields sequentially
+    parallel_fields = 1
+    logger.info("Field-level parallelization DISABLED - processing sequentially to avoid MS locking")
+
     # PRE-LOAD: Read ALL data (baselines + DATA + FLAG) for all fields BEFORE parallelization
     # This completely avoids MS locking issues during parallel processing
     field_baselines = {}

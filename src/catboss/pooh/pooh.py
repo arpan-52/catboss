@@ -1885,6 +1885,16 @@ def process_single_field(
         baselines = list(baselines)
         logger.info(f"Found {len(baselines)} unique baselines in field {field_id}")
 
+    # Extract active antennas from baselines
+    active_antennas = set()
+    for ant1, ant2 in baselines:
+        active_antennas.add(ant1)
+        active_antennas.add(ant2)
+
+    logger.info(f"Active antennas in this field: {len(active_antennas)} antennas → {len(baselines)} baselines")
+    if logger and options.get("verbose"):
+        logger.debug(f"  Active antenna IDs: {sorted(active_antennas)}")
+
     # Skip if no baselines
     if not baselines:
         logger.warning(f"No baselines found for field {field_id}. Skipping.")
@@ -2039,9 +2049,26 @@ def process_single_field(
                         valid_baselines_set.add(bl)  # Use set to avoid duplicates
 
         valid_baselines = list(valid_baselines_set)  # Convert to list
+
+        # Calculate which antennas are working
+        working_antennas = set()
+        flagged_antennas_from_baselines = set()
+        for bl in valid_baselines:
+            working_antennas.add(bl[0])
+            working_antennas.add(bl[1])
+
+        # Antennas that appear only in completely flagged baselines
+        all_active_antennas = active_antennas.copy()
+        potentially_flagged = all_active_antennas - working_antennas
+
         logger.info(
-            f"[PRE-FILTER] Result: {len(valid_baselines)} valid, {baselines_skipped} completely flagged"
+            f"[PRE-FILTER] Result: {len(valid_baselines)} valid baselines, {baselines_skipped} completely flagged"
         )
+        logger.info(
+            f"[PRE-FILTER] Antennas: {len(working_antennas)} working, {len(potentially_flagged)} have all baselines flagged"
+        )
+        if options.get("verbose") and potentially_flagged:
+            logger.debug(f"  Completely flagged antenna IDs: {sorted(potentially_flagged)}")
 
     except Exception as e:
         logger.warning(
@@ -2193,9 +2220,12 @@ def process_single_field(
                 valid_baseline_data = {}
 
                 for bl in batch:
-                    if bl not in baseline_data or not baseline_data[bl]["data"]:
-                        if options["verbose"]:
-                            logger.debug(f"No data found for baseline {bl}. Skipping.")
+                    if bl not in baseline_data:
+                        logger.warning(f"Baseline {bl} not found in MS data for this field. Skipping.")
+                        baselines_skipped += 1
+                        continue
+                    if not baseline_data[bl]["data"]:
+                        logger.warning(f"Baseline {bl} has no data rows. Skipping.")
                         baselines_skipped += 1
                         continue
 
@@ -2220,6 +2250,7 @@ def process_single_field(
 
                 # Process batch on GPU
                 if valid_baseline_data:
+                    logger.info(f"Processing {len(valid_baseline_data)} baselines from this batch...")
                     # Process batch with optimized GPU code
                     batch_results = process_baselines_batch_gpu(
                         valid_baseline_data,
@@ -2257,13 +2288,13 @@ def process_single_field(
                             baselines_skipped += 1
                             continue
 
-                # Write flags if requested
-                if options["apply_flags"]:
-                    try:
-                        # Process each baseline separately
-                        for bl in batch_results.keys():
-                            if options["verbose"]:
-                                logger.debug(f"Writing flags for baseline {bl}...")
+                    # Write flags if requested
+                    if options["apply_flags"]:
+                        try:
+                            # Process each baseline separately
+                            for bl in batch_results.keys():
+                                if options["verbose"]:
+                                    logger.debug(f"Writing flags for baseline {bl}...")
 
                             # Create baseline-specific query
                             bl_taql = f"FIELD_ID={field_id} AND ANTENNA1={bl[0]} AND ANTENNA2={bl[1]}"
@@ -2341,13 +2372,13 @@ def process_single_field(
                             updated_ds = None
                             gc.collect()
 
-                    except Exception as e:
-                        logger.error(f"Error writing flags: {str(e)}")
-                        import traceback
+                        except Exception as e:
+                            logger.error(f"Error writing flags: {str(e)}")
+                            import traceback
 
-                        traceback.print_exc()
+                            traceback.print_exc()
                 else:
-                    logger.warning("No valid baselines found in this batch. Skipping.")
+                    logger.info(f"All {len(valid_baseline_data)} baselines processed (apply_flags=False, flags not written)")
 
                 # Clean up
                 batch_ds_list = None

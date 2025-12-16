@@ -1,0 +1,22 @@
+# Include all C++ source and header files
+recursive-include nami/cpp *.cpp *.h
+
+# Include documentation
+include README.md
+include LICENSE
+include ARCHITECTURE.md
+include RECOMMENDED_APPROACH.md
+
+# Include build configuration
+include pyproject.toml
+include setup.py
+include requirements.txt
+include find_casacore.py
+
+# Exclude compiled files and caches
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude *.so
+global-exclude *.dylib
+global-exclude *.dll

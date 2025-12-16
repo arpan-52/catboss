@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "pybind11>=2.6.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nami"
+version = "0.2.0"
+description = "NAMI: Nonlinear Automated Monotonous filter for Interference (with C++ acceleration)"
+readme = "README.md"
+authors = [
+    {name = "Arpan Pal", email = "apal@ncra.tifr.res.in"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: C++",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+requires-python = ">=3.7"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "scipy",
+    "statsmodels",
+    "python-casacore",
+    "pybind11>=2.6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/arpan-52/nami"
+Repository = "https://github.com/arpan-52/nami"
+
+[project.scripts]
+nami = "nami.navigator:main"

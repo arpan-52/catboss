@@ -1,0 +1,1 @@
+NAMI - Nonlinear Automated Monotonous filter for Interference

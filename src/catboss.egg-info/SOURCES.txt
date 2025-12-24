@@ -10,6 +10,12 @@ src/catboss.egg-info/dependency_links.txt
 src/catboss.egg-info/entry_points.txt
 src/catboss.egg-info/requires.txt
 src/catboss.egg-info/top_level.txt
+src/catboss/nami/find_casacore.py
+src/catboss/nami/setup.py
+src/catboss/nami/nami/__init__.py
+src/catboss/nami/nami/core_functions.py
+src/catboss/nami/nami/navigator.py
+src/catboss/nami/nami/timing.py
 src/catboss/pooh/__init__.py
 src/catboss/pooh/bp.py
 src/catboss/pooh/pooh.py

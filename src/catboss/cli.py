@@ -160,6 +160,15 @@ Examples:
             help="Comma-separated correlation indices (default: 0 and last)",
         )
 
+        # Data column selection
+        pooh_parser.add_argument(
+            "--datacolumn",
+            type=str,
+            default="DATA",
+            help="Data column to process (e.g., DATA, CORRECTED_DATA, MODEL_DATA, RESIDUAL_DATA). "
+                 "RESIDUAL_DATA will compute DATA - MODEL_DATA. (default: DATA)",
+        )
+
         # Output options
         pooh_parser.add_argument(
             "--apply-flags",
@@ -236,6 +245,7 @@ Examples:
                 ]
                 if pooh_args.polarizations
                 else None,
+                "datacolumn": pooh_args.datacolumn,
                 "apply_flags": pooh_args.apply_flags,
                 "diagnostic_plots": pooh_args.diagnostic_plots,
                 "output_dir": pooh_args.output_dir,
@@ -262,6 +272,7 @@ Examples:
         logger.info(f"Processing Measurement Set: {pooh_args.ms_path}")
         logger.info("=" * 70)
         logger.info("Configuration:")
+        logger.info(f"  Data column: {config_options['datacolumn']}")
         logger.info(f"  Window sizes: {config_options['combinations']}")
         logger.info(f"  Sigma factor: {config_options['sigma_factor']}")
         logger.info(f"  Rho: {config_options['rho']}")

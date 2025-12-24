@@ -30,6 +30,93 @@ except Exception as e:
     cuda = None
 
 
+def read_data_column(ms_file, datacolumn, columns_tuple, taql_where=None, chunks=None):
+    """
+    Read data from MS with support for RESIDUAL_DATA calculation.
+
+    Args:
+        ms_file: Path to MS file
+        datacolumn: Column name to read (e.g., 'DATA', 'CORRECTED_DATA', 'RESIDUAL_DATA')
+        columns_tuple: Tuple of columns to read (e.g., ('DATA', 'FLAG', 'ANTENNA1', 'ANTENNA2'))
+        taql_where: Optional TAQL query string
+        chunks: Optional chunking specification
+
+    Returns:
+        List of xarray datasets with data column appropriately set
+    """
+    # Special handling for RESIDUAL_DATA
+    if datacolumn.upper() == 'RESIDUAL_DATA':
+        # Read both DATA and MODEL_DATA
+        cols_list = list(columns_tuple)
+        # Replace 'DATA' with both 'DATA' and 'MODEL_DATA'
+        if 'DATA' in cols_list:
+            cols_list.remove('DATA')
+        cols_with_model = tuple(cols_list + ['DATA', 'MODEL_DATA'])
+
+        kwargs = {'columns': cols_with_model}
+        if taql_where:
+            kwargs['taql_where'] = taql_where
+        if chunks:
+            kwargs['chunks'] = chunks
+
+        ds_list = xds_from_ms(ms_file, **kwargs)
+
+        # Calculate residuals for each dataset
+        result_ds_list = []
+        for ds in ds_list:
+            # Check if MODEL_DATA exists
+            if not hasattr(ds, 'MODEL_DATA'):
+                raise ValueError(
+                    f"RESIDUAL_DATA requested but MODEL_DATA column not found in MS file. "
+                    f"Please run a calibration task first or use a different data column."
+                )
+
+            # Calculate DATA - MODEL_DATA
+            residual_data = ds.DATA - ds.MODEL_DATA
+
+            # Create new dataset with DATA replaced by residuals
+            ds_modified = ds.assign(DATA=residual_data)
+            # Drop MODEL_DATA to save memory
+            ds_modified = ds_modified.drop_vars('MODEL_DATA')
+            result_ds_list.append(ds_modified)
+
+        return result_ds_list
+
+    else:
+        # Normal case - just read the specified column
+        # Replace 'DATA' in columns_tuple with the user-specified column
+        cols_list = list(columns_tuple)
+        if 'DATA' in cols_list:
+            cols_list[cols_list.index('DATA')] = datacolumn
+        cols_final = tuple(cols_list)
+
+        kwargs = {'columns': cols_final}
+        if taql_where:
+            kwargs['taql_where'] = taql_where
+        if chunks:
+            kwargs['chunks'] = chunks
+
+        try:
+            ds_list = xds_from_ms(ms_file, **kwargs)
+
+            # Rename the column back to 'DATA' for consistent processing
+            result_ds_list = []
+            for ds in ds_list:
+                if hasattr(ds, datacolumn) and datacolumn != 'DATA':
+                    ds_modified = ds.rename({datacolumn: 'DATA'})
+                    result_ds_list.append(ds_modified)
+                else:
+                    result_ds_list.append(ds)
+
+            return result_ds_list
+
+        except Exception as e:
+            raise ValueError(
+                f"Failed to read column '{datacolumn}' from MS file. "
+                f"Column may not exist. Error: {str(e)}"
+            )
+
+
 def apply_flags_to_ms(ms_file, bl, field_id, new_flags):
     """Apply flags to the MS file for a specific baseline"""
     # Create baseline-specific query
@@ -1776,7 +1863,7 @@ def process_baseline_async(
     return combined_flags, existing_flag_count, new_flag_count
 
 
-def preload_field_data(ms_file, field_id, baselines, chunk_size, logger):
+def preload_field_data(ms_file, field_id, baselines, chunk_size, datacolumn, logger):
     """
     Pre-load all DATA and FLAG information for a field into memory.
     This avoids MS locking issues during parallel processing.
@@ -1793,10 +1880,11 @@ def preload_field_data(ms_file, field_id, baselines, chunk_size, logger):
 
     taql_where = f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
 
-    # Read data
-    ds_list = xds_from_ms(
+    # Read data using helper function
+    ds_list = read_data_column(
         ms_file,
-        columns=("DATA", "FLAG", "ANTENNA1", "ANTENNA2"),
+        datacolumn,
+        columns_tuple=("DATA", "FLAG", "ANTENNA1", "ANTENNA2"),
         taql_where=taql_where,
         chunks={"row": chunk_size},
     )
@@ -1854,8 +1942,9 @@ def process_single_field(
     baselines_processed = 0
     baselines_skipped = 0
 
-    # Get chunk size from options (user-configurable)
+    # Get chunk size and datacolumn from options (user-configurable)
     chunk_size = options.get("chunk_size", 200000)
+    datacolumn = options.get("datacolumn", "DATA")
 
     logger.info(f"\n*** Processing Field {field_id} ***")
 
@@ -1913,7 +2002,7 @@ def process_single_field(
     )
 
     try:
-        sample_ds = xds_from_ms(ms_file, columns=("DATA",), taql_where=sample_taql)[0]
+        sample_ds = read_data_column(ms_file, datacolumn, columns_tuple=("DATA",), taql_where=sample_taql)[0]
 
         if sample_ds.sizes["row"] == 0:
             logger.warning(f"No data found for sample baseline {sample_bl}. Skipping field.")
@@ -1930,7 +2019,7 @@ def process_single_field(
         logger.error(f"Error reading sample baseline: {str(e)}")
         try:
             # Try simpler read
-            simple_ds = xds_from_ms(ms_file, columns=("DATA",))[0]
+            simple_ds = read_data_column(ms_file, datacolumn, columns_tuple=("DATA",))[0]
             data_shape = simple_ds.DATA.shape
         except Exception as e2:
             logger.error(f"Could not determine data shape: {str(e2)}")
@@ -2414,8 +2503,8 @@ def process_single_field(
                     f"FIELD_ID={field_id} AND ANTENNA1={bl[0]} AND ANTENNA2={bl[1]}"
                 )
 
-                bl_ds_list = xds_from_ms(
-                    ms_file, columns=("DATA", "FLAG"), taql_where=taql_where
+                bl_ds_list = read_data_column(
+                    ms_file, datacolumn, columns_tuple=("DATA", "FLAG"), taql_where=taql_where
                 )
 
                 # Skip if no data
@@ -2644,6 +2733,7 @@ def hunt_ms(ms_file, options):
     field_baselines = {}
     field_data_cache = {}
     chunk_size = options.get("chunk_size", 200000)
+    datacolumn = options.get("datacolumn", "DATA")
 
     if parallel_fields > 1 and len(field_ids) > 1:
         logger.info("\n" + "=" * 70)
@@ -2671,7 +2761,7 @@ def hunt_ms(ms_file, options):
                     logger.info(f"    Found {len(baselines)} baselines")
 
                     # Now pre-load all DATA and FLAG for this field
-                    field_data = preload_field_data(ms_file, field_id, baselines, chunk_size, logger)
+                    field_data = preload_field_data(ms_file, field_id, baselines, chunk_size, datacolumn, logger)
                     field_data_cache[field_id] = field_data
                     logger.info(f"    ✓ Pre-loaded data for {len(field_data)} baselines\n")
                 else:

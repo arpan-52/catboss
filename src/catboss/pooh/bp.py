@@ -33,6 +33,93 @@ except Exception as e:
     cuda = None
 
 
+def read_data_column(ms_file, datacolumn, columns_tuple, taql_where=None, chunks=None):
+    """
+    Read data from MS with support for RESIDUAL_DATA calculation.
+
+    Args:
+        ms_file: Path to MS file
+        datacolumn: Column name to read (e.g., 'DATA', 'CORRECTED_DATA', 'RESIDUAL_DATA')
+        columns_tuple: Tuple of columns to read (e.g., ('DATA', 'FLAG', 'ANTENNA1', 'ANTENNA2'))
+        taql_where: Optional TAQL query string
+        chunks: Optional chunking specification
+
+    Returns:
+        List of xarray datasets with data column appropriately set
+    """
+    # Special handling for RESIDUAL_DATA
+    if datacolumn.upper() == 'RESIDUAL_DATA':
+        # Read both DATA and MODEL_DATA
+        cols_list = list(columns_tuple)
+        # Replace 'DATA' with both 'DATA' and 'MODEL_DATA'
+        if 'DATA' in cols_list:
+            cols_list.remove('DATA')
+        cols_with_model = tuple(cols_list + ['DATA', 'MODEL_DATA'])
+
+        kwargs = {'columns': cols_with_model}
+        if taql_where:
+            kwargs['taql_where'] = taql_where
+        if chunks:
+            kwargs['chunks'] = chunks
+
+        ds_list = xds_from_ms(ms_file, **kwargs)
+
+        # Calculate residuals for each dataset
+        result_ds_list = []
+        for ds in ds_list:
+            # Check if MODEL_DATA exists
+            if not hasattr(ds, 'MODEL_DATA'):
+                raise ValueError(
+                    f"RESIDUAL_DATA requested but MODEL_DATA column not found in MS file. "
+                    f"Please run a calibration task first or use a different data column."
+                )
+
+            # Calculate DATA - MODEL_DATA
+            residual_data = ds.DATA - ds.MODEL_DATA
+
+            # Create new dataset with DATA replaced by residuals
+            ds_modified = ds.assign(DATA=residual_data)
+            # Drop MODEL_DATA to save memory
+            ds_modified = ds_modified.drop_vars('MODEL_DATA')
+            result_ds_list.append(ds_modified)
+
+        return result_ds_list
+
+    else:
+        # Normal case - just read the specified column
+        # Replace 'DATA' in columns_tuple with the user-specified column
+        cols_list = list(columns_tuple)
+        if 'DATA' in cols_list:
+            cols_list[cols_list.index('DATA')] = datacolumn
+        cols_final = tuple(cols_list)
+
+        kwargs = {'columns': cols_final}
+        if taql_where:
+            kwargs['taql_where'] = taql_where
+        if chunks:
+            kwargs['chunks'] = chunks
+
+        try:
+            ds_list = xds_from_ms(ms_file, **kwargs)
+
+            # Rename the column back to 'DATA' for consistent processing
+            result_ds_list = []
+            for ds in ds_list:
+                if hasattr(ds, datacolumn) and datacolumn != 'DATA':
+                    ds_modified = ds.rename({datacolumn: 'DATA'})
+                    result_ds_list.append(ds_modified)
+                else:
+                    result_ds_list.append(ds)
+
+            return result_ds_list
+
+        except Exception as e:
+            raise ValueError(
+                f"Failed to read column '{datacolumn}' from MS file. "
+                f"Column may not exist. Error: {str(e)}"
+            )
+
+
 def print_gpu_info():
     """Print basic information about available GPUs or CPU mode"""
     print("=== Hardware Information ===")

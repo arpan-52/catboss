@@ -2346,6 +2346,9 @@ def process_single_field(
                 # Dictionary to store baseline data
                 baseline_data = {}
 
+                # Store loaded dataset data to avoid re-reading
+                dataset_cache = []  # List of (ds, ant1, ant2, data, flags)
+
                 # Process each dataset
                 for ds in batch_ds_list:
                     # Materialize data in one operation
@@ -2356,6 +2359,9 @@ def process_single_field(
                     )
                     compute_time = time.time() - compute_start
                     logger.info(f"  [I/O] dask.compute took {compute_time:.2f} seconds")
+
+                    # Cache this loaded data for reuse during writing
+                    dataset_cache.append((ds, ant1, ant2, data, flags))
 
                     # Group by baseline
                     for i, (a1, a2) in enumerate(zip(ant1, ant2)):
@@ -2450,57 +2456,39 @@ def process_single_field(
                             baselines_skipped += 1
                             continue
 
-                    # Write flags if requested - EFFICIENT BATCH WRITE
+                    # Write flags if requested - REUSE CACHED DATA
                     if options["apply_flags"]:
-                        logger.info(f"Writing flags for {len(batch_results)} baselines to MS (batch write)...")
+                        logger.info(f"Writing flags for {len(batch_results)} baselines to MS...")
 
                         try:
-                            # Update all datasets from batch_ds_list with new flags
+                            # Use cached data (already loaded - no re-reading!)
                             updated_datasets = []
-                            baselines_written = 0
 
-                            for ds in batch_ds_list:
-                                # Get antenna and flag data for this dataset chunk
-                                ds_ant1, ds_ant2, ds_flags = dask.compute(
-                                    ds.ANTENNA1.data,
-                                    ds.ANTENNA2.data,
-                                    ds.FLAG.data
-                                )
-
+                            for ds, ds_ant1, ds_ant2, ds_data, ds_flags in dataset_cache:
                                 # Create updated flags array (start with original)
                                 updated_flags = ds_flags.copy()
                                 rows_updated = 0
 
-                                # Update flags for all baselines present in this dataset chunk
+                                # Update flags for all baselines in this dataset chunk
                                 for i, (a1, a2) in enumerate(zip(ds_ant1, ds_ant2)):
                                     bl = (a1, a2)
                                     if bl in batch_results:
-                                        # Get new flags for this baseline from batch_results
+                                        # Get new flags for this baseline
                                         bl_new_flags = batch_results[bl]
 
-                                        # Map baseline's flags to this specific row
-                                        # Find which row index this corresponds to in the baseline's data
-                                        bl_data_obj = valid_baseline_data.get(bl)
-                                        if bl_data_obj is not None:
-                                            # Get this row's flags from batch_results
-                                            # bl_new_flags has shape (time_samples, freq_channels, [corr])
-                                            # We need to match the current row's time sample
+                                        # Handle broadcasting from 2D to 3D if needed
+                                        if len(ds_flags.shape) == 3 and len(bl_new_flags.shape) == 2:
+                                            # Apply 2D flags to all correlations
+                                            for corr_idx in range(ds_flags.shape[2]):
+                                                updated_flags[i, :, corr_idx] = bl_new_flags[0, :]
+                                        elif len(ds_flags.shape) == 3 and len(bl_new_flags.shape) == 3:
+                                            # Direct 3D to 3D
+                                            updated_flags[i] = bl_new_flags[0]
+                                        else:
+                                            # Same dimensionality
+                                            updated_flags[i] = bl_new_flags[0] if len(bl_new_flags) > 0 else bl_new_flags
 
-                                            # Handle broadcasting from 2D to 3D if needed
-                                            if len(ds_flags.shape) == 3 and len(bl_new_flags.shape) == 2:
-                                                # Apply 2D flags to all correlations
-                                                for corr_idx in range(ds_flags.shape[2]):
-                                                    # Use the full 2D flag array for all time samples
-                                                    updated_flags[i, :, corr_idx] = bl_new_flags[0, :]
-                                            elif len(ds_flags.shape) == 3 and len(bl_new_flags.shape) == 3:
-                                                # Direct 3D to 3D copy
-                                                updated_flags[i] = bl_new_flags[0]
-                                            else:
-                                                # Same dimensionality
-                                                updated_flags[i] = bl_new_flags[0] if len(bl_new_flags) > 0 else bl_new_flags
-
-                                            rows_updated += 1
-                                            baselines_written += 1
+                                        rows_updated += 1
 
                                 if rows_updated > 0:
                                     # Convert to dask array with same chunking
@@ -2509,18 +2497,17 @@ def process_single_field(
                                         chunks=ds.FLAG.data.chunks
                                     )
 
-                                    # Create updated dataset (retains original row mapping!)
+                                    # Create updated dataset
                                     updated_ds = ds.assign(
                                         FLAG=(ds.FLAG.dims, updated_flags_dask)
                                     )
                                     updated_datasets.append(updated_ds)
 
-                            # Write ALL datasets in ONE operation (massive speedup!)
+                            # Write ALL datasets in ONE operation
                             if updated_datasets:
-                                logger.info(f"  Writing {len(updated_datasets)} dataset chunks containing {len(batch_results)} baselines...")
                                 write_back = xds_to_table(updated_datasets, ms_file, ["FLAG"])
                                 dask.compute(write_back)
-                                logger.info(f"✓ Flags written for {len(batch_results)} baselines in 1 operation!")
+                                logger.info(f"✓ Flags written for {len(batch_results)} baselines")
                             else:
                                 logger.warning("No datasets to write!")
 

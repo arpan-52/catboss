@@ -2314,6 +2314,9 @@ def process_single_field(
                     f"\nProcessing batch {i // bl_per_batch + 1}/{(len(valid_baselines) + bl_per_batch - 1) // bl_per_batch}: {batch_size} baselines"
                 )
 
+                import time
+                read_start = time.time()
+
                 # Read all baselines in one query
                 baseline_clauses = []
                 for ant1, ant2 in batch:
@@ -2324,6 +2327,7 @@ def process_single_field(
                 )
 
                 # Read data
+                logger.info(f"  [I/O] Reading data from MS file...")
                 batch_ds_list = xds_from_ms(
                     ms_file,
                     columns=("DATA", "FLAG", "ANTENNA1", "ANTENNA2"),
@@ -2336,9 +2340,13 @@ def process_single_field(
                 # Process each dataset
                 for ds in batch_ds_list:
                     # Materialize data in one operation
+                    logger.info(f"  [I/O] Loading {batch_size} baselines into memory (dask.compute)...")
+                    compute_start = time.time()
                     ant1, ant2, data, flags = dask.compute(
                         ds.ANTENNA1.data, ds.ANTENNA2.data, ds.DATA.data, ds.FLAG.data
                     )
+                    compute_time = time.time() - compute_start
+                    logger.info(f"  [I/O] dask.compute took {compute_time:.2f} seconds")
 
                     # Group by baseline
                     for i, (a1, a2) in enumerate(zip(ant1, ant2)):

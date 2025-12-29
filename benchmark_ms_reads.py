@@ -74,9 +74,44 @@ def benchmark_casacore_or_query(ms_file, field_id, baselines):
     return elapsed
 
 
+def benchmark_casacore_simple_taql(ms_file, field_id, baselines):
+    """casacore table - simple TaQL, read ALL baselines, filter in memory"""
+    print("\n4. Testing casacore SIMPLE TaQL (read all, filter in memory)...")
+
+    start = time.time()
+
+    with table(ms_file) as t:
+        # Simple query: just field ID (NO complex OR query)
+        t_field = t.query(f"FIELD_ID=={field_id}")
+
+        # Read ALL columns for the field
+        ant1 = t_field.getcol("ANTENNA1")
+        ant2 = t_field.getcol("ANTENNA2")
+        data = t_field.getcol("DATA")
+        flags = t_field.getcol("FLAG")
+
+        # Filter by baseline in memory (FAST!)
+        baseline_data = {}
+        for bl in baselines:
+            mask = (ant1 == bl[0]) & (ant2 == bl[1])
+            if np.any(mask):
+                baseline_data[bl] = {
+                    "data": data[mask],
+                    "flags": flags[mask]
+                }
+
+        t_field.close()
+
+    elapsed = time.time() - start
+    print(f"   Time: {elapsed:.2f} seconds")
+    print(f"   Total rows read: {len(ant1)}")
+    print(f"   Baselines extracted: {len(baseline_data)}")
+    return elapsed
+
+
 def benchmark_casacore_sequential(ms_file, field_id, baselines):
     """casacore table - read antennas first, then query each baseline"""
-    print("\n4. Testing casacore table (ANTENNA SCAN + INDIVIDUAL QUERIES)...")
+    print("\n5. Testing casacore table (ANTENNA SCAN + INDIVIDUAL QUERIES)...")
 
     start = time.time()
 
@@ -184,10 +219,16 @@ def main():
         results["casacore_or"] = None
 
     try:
-        results["casacore_seq"] = benchmark_casacore_sequential(ms_file, field_id, test_baselines)
+        results["casacore_simple"] = benchmark_casacore_simple_taql(ms_file, field_id, test_baselines)
     except Exception as e:
         print(f"   FAILED: {e}")
-        results["casacore_seq"] = None
+        results["casacore_simple"] = None
+
+    try:
+        results["casacore_scan"] = benchmark_casacore_sequential(ms_file, field_id, test_baselines)
+    except Exception as e:
+        print(f"   FAILED: {e}")
+        results["casacore_scan"] = None
 
     try:
         results["casacore_1by1"] = benchmark_casacore_one_by_one(ms_file, field_id, test_baselines)

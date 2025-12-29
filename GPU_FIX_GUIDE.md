@@ -1,5 +1,16 @@
 # GPU Segfault Fix Guide for CATBOSS
 
+## Quick Diagnosis Summary
+
+If you just ran `test_gpu.py` and saw which test failed, jump to the corresponding section below:
+
+- **Test 5 fails**: Your CUDA driver has a context reuse bug → Update NVIDIA driver
+- **Test 6 fails**: CUDA stream creation is broken → **CUDA/Numba version mismatch** (most common!)
+- **Test 11 fails**: Threading with CUDA is broken → Use single-threaded mode
+
+**Most Common Issue**: Test 6 failure with CUDA 12.3 + Numba 0.58.1 = stream creation incompatibility.
+**Quick Fix**: `conda install -c conda-forge numba cudatoolkit=11.8` then `python test_gpu.py`
+
 ## Understanding the Problem
 
 Your GPU passes initial tests but segfaults during actual processing. This guide will help you diagnose and fix the issue.
@@ -52,12 +63,45 @@ python test_gpu.py
    ```
 
 ### If Test 6 fails (CUDA stream creation):
-**Problem**: CUDA stream creation is broken.
+**Problem**: CUDA stream creation segfaults. This is a known incompatibility between CUDA 12.3 and Numba 0.58.1.
 
-**Fix**:
+Your GPU hardware is FINE - context and memory operations work perfectly. This is purely a software version mismatch.
+
+**Fix Option 1 - Downgrade to CUDA 11.8 (RECOMMENDED)**:
 ```bash
-# Reinstall numba and cudatoolkit
+# This is the most stable combination for Numba
+pip uninstall numba llvmlite -y
 conda install -c conda-forge numba cudatoolkit=11.8
+
+# Verify the fix
+python test_gpu.py
+```
+
+**Fix Option 2 - Upgrade to Numba 0.59+ with CUDA 12 support**:
+```bash
+# Newer Numba versions have better CUDA 12 support
+pip uninstall numba llvmlite -y
+pip install --upgrade numba>=0.59.0
+
+# Verify the fix
+python test_gpu.py
+```
+
+**Fix Option 3 - Use conda to manage everything**:
+```bash
+# Let conda resolve all dependencies
+conda remove numba llvmlite cudatoolkit --force -y
+conda install -c conda-forge numba cudatoolkit=11.8
+
+# Verify the fix
+python test_gpu.py
+```
+
+**Temporary Workaround - Use CPU mode**:
+If you need to run catboss immediately while fixing the CUDA issue:
+```bash
+export CATBOSS_NO_GPU=1
+catboss --cat pooh data.ms --apply-flags
 ```
 
 ### If Test 11 fails (ThreadPoolExecutor):

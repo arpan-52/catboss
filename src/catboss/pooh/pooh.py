@@ -2667,8 +2667,9 @@ def process_single_field(
 
 def hunt_ms(ms_file, options):
     """The main function which processes the MS file with SumThreshold flagging"""
-    # Get logger from options
+    # Get logger and datacolumn from options
     logger = options.get("logger")
+    datacolumn = options.get("datacolumn", "DATA")
 
     # Clean up stale lock file from previous run (only in MS root, not subdirectories)
     lock_file = os.path.join(ms_file, "table.lock")
@@ -2742,7 +2743,6 @@ def hunt_ms(ms_file, options):
     field_baselines = {}
     field_data_cache = {}
     chunk_size = options.get("chunk_size", 200000)
-    datacolumn = options.get("datacolumn", "DATA")
 
     if parallel_fields > 1 and len(field_ids) > 1:
         logger.info("\n" + "=" * 70)

@@ -2450,97 +2450,84 @@ def process_single_field(
                             baselines_skipped += 1
                             continue
 
-                    # Write flags if requested
+                    # Write flags if requested - EFFICIENT BATCH WRITE
                     if options["apply_flags"]:
-                        logger.info(f"Writing flags for {len(batch_results)} baselines to MS...")
-                        # Process each baseline separately
-                        for bl_idx, bl in enumerate(batch_results.keys(), 1):
-                            try:
-                                if options["verbose"]:
-                                    logger.debug(f"  [{bl_idx}/{len(batch_results)}] Writing baseline {bl}...")
+                        logger.info(f"Writing flags for {len(batch_results)} baselines to MS (batch write)...")
 
-                                # Create baseline-specific query
-                                bl_taql = f"FIELD_ID={field_id} AND ANTENNA1={bl[0]} AND ANTENNA2={bl[1]}"
+                        try:
+                            # Update all datasets from batch_ds_list with new flags
+                            updated_datasets = []
+                            baselines_written = 0
 
-                                # Read original data
-                                orig_ds_list = xds_from_ms(
-                                    ms_file,
-                                    columns=("FLAG",),
-                                    taql_where=bl_taql,
+                            for ds in batch_ds_list:
+                                # Get antenna and flag data for this dataset chunk
+                                ds_ant1, ds_ant2, ds_flags = dask.compute(
+                                    ds.ANTENNA1.data,
+                                    ds.ANTENNA2.data,
+                                    ds.FLAG.data
                                 )
 
-                                if not orig_ds_list or orig_ds_list[0].sizes["row"] == 0:
-                                    logger.warning(f"No data found for baseline {bl}. Skipping.")
-                                    continue
+                                # Create updated flags array (start with original)
+                                updated_flags = ds_flags.copy()
+                                rows_updated = 0
 
-                                # Get original dataset and flags
-                                orig_ds = orig_ds_list[0]
-                                orig_flags = orig_ds.FLAG.data.compute()
+                                # Update flags for all baselines present in this dataset chunk
+                                for i, (a1, a2) in enumerate(zip(ds_ant1, ds_ant2)):
+                                    bl = (a1, a2)
+                                    if bl in batch_results:
+                                        # Get new flags for this baseline from batch_results
+                                        bl_new_flags = batch_results[bl]
 
-                                # Get new flags
-                                bl_flags = batch_results[bl]
+                                        # Map baseline's flags to this specific row
+                                        # Find which row index this corresponds to in the baseline's data
+                                        bl_data_obj = valid_baseline_data.get(bl)
+                                        if bl_data_obj is not None:
+                                            # Get this row's flags from batch_results
+                                            # bl_new_flags has shape (time_samples, freq_channels, [corr])
+                                            # We need to match the current row's time sample
 
-                                # Handle broadcasting from 2D to 3D if needed
-                                if len(orig_flags.shape) == 3 and len(bl_flags.shape) == 2:
-                                    # Create output with same shape as original flags
-                                    combined_flags = orig_flags.copy()
+                                            # Handle broadcasting from 2D to 3D if needed
+                                            if len(ds_flags.shape) == 3 and len(bl_new_flags.shape) == 2:
+                                                # Apply 2D flags to all correlations
+                                                for corr_idx in range(ds_flags.shape[2]):
+                                                    # Use the full 2D flag array for all time samples
+                                                    updated_flags[i, :, corr_idx] = bl_new_flags[0, :]
+                                            elif len(ds_flags.shape) == 3 and len(bl_new_flags.shape) == 3:
+                                                # Direct 3D to 3D copy
+                                                updated_flags[i] = bl_new_flags[0]
+                                            else:
+                                                # Same dimensionality
+                                                updated_flags[i] = bl_new_flags[0] if len(bl_new_flags) > 0 else bl_new_flags
 
-                                    # Apply new flags to ALL correlations, not just the ones in corr_to_process
-                                    for corr_idx in range(orig_flags.shape[2]):
-                                        combined_flags[:, :, corr_idx] = np.logical_or(
-                                            orig_flags[:, :, corr_idx], bl_flags
-                                        )
-                                else:
-                                    # If we already have 3D flags from processing specific correlations
-                                    # Make sure all correlations get the flags
-                                    if (
-                                        len(bl_flags.shape) == 3
-                                        and bl_flags.shape[2] < orig_flags.shape[2]
-                                    ):
-                                        combined_flags = orig_flags.copy()
+                                            rows_updated += 1
+                                            baselines_written += 1
 
-                                        # Apply processed correlation flags to all correlations
-                                        processed_flags = np.any(
-                                            bl_flags, axis=2, keepdims=True
-                                        )
-                                        for corr_idx in range(orig_flags.shape[2]):
-                                            combined_flags[:, :, corr_idx] = np.logical_or(
-                                                orig_flags[:, :, corr_idx],
-                                                processed_flags[:, :, 0],
-                                            )
-                                    else:
-                                        # If shapes already match
-                                        combined_flags = np.logical_or(orig_flags, bl_flags)
+                                if rows_updated > 0:
+                                    # Convert to dask array with same chunking
+                                    updated_flags_dask = da.from_array(
+                                        updated_flags,
+                                        chunks=ds.FLAG.data.chunks
+                                    )
 
-                                # Convert back to dask array with SAME chunking
-                                new_flags_dask = da.from_array(
-                                    combined_flags, chunks=orig_ds.FLAG.data.chunks
-                                )
+                                    # Create updated dataset (retains original row mapping!)
+                                    updated_ds = ds.assign(
+                                        FLAG=(ds.FLAG.dims, updated_flags_dask)
+                                    )
+                                    updated_datasets.append(updated_ds)
 
-                                # Create updated dataset
-                                updated_ds = orig_ds.assign(
-                                    FLAG=(orig_ds.FLAG.dims, new_flags_dask)
-                                )
-
-                                # Write back
-                                write_back = xds_to_table([updated_ds], ms_file, ["FLAG"])
+                            # Write ALL datasets in ONE operation (massive speedup!)
+                            if updated_datasets:
+                                logger.info(f"  Writing {len(updated_datasets)} dataset chunks containing {len(batch_results)} baselines...")
+                                write_back = xds_to_table(updated_datasets, ms_file, ["FLAG"])
                                 dask.compute(write_back)
+                                logger.info(f"✓ Flags written for {len(batch_results)} baselines in 1 operation!")
+                            else:
+                                logger.warning("No datasets to write!")
 
-                                # Clean up this baseline's data immediately
-                                orig_ds_list = None
-                                orig_ds = None
-                                orig_flags = None
-                                combined_flags = None
-                                new_flags_dask = None
-                                updated_ds = None
-                                gc.collect()
-
-                            except Exception as e:
-                                logger.error(f"Error writing flags for baseline {bl}: {str(e)}")
-                                import traceback
-                                traceback.print_exc()
-                                continue
-                        logger.info(f"✓ Flags written for {len(batch_results)} baselines")
+                        except Exception as e:
+                            logger.error(f"Batch write failed: {str(e)}")
+                            import traceback
+                            traceback.print_exc()
                 else:
                     logger.info(f"All {len(valid_baseline_data)} baselines processed (apply_flags=False, flags not written)")
 

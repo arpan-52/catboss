@@ -842,21 +842,27 @@ def sumthreshold_gpu(
 def get_memory_info(logger=None):
     """Get information about available GPU and system memory"""
     # Get GPU memory information
+    gpu_usable_mem = 0
     if GPU_AVAILABLE:
         try:
-            free_mem, total_mem = cuda.current_context().get_memory_info()
+            # Force context creation if needed
+            ctx = cuda.current_context()
+            free_mem, total_mem = ctx.get_memory_info()
             gpu_usable_mem = free_mem * 0.9  # Use 90% of free memory to be safe
-            logger.info(
-                f"   GPU: {total_mem / 1e9:.2f} GB total | {free_mem / 1e9:.2f} GB free | {gpu_usable_mem / 1e9:.2f} GB usable"
-            )
+            if logger:
+                logger.info(
+                    f"   GPU: {total_mem / 1e9:.2f} GB total | {free_mem / 1e9:.2f} GB free | {gpu_usable_mem / 1e9:.2f} GB usable"
+                )
         except Exception as e:
-            logger.warning(
-                f"Could not determine GPU memory, assuming 8GB: {str(e)}"
-            )
-            gpu_usable_mem = 6 * 1024 * 1024 * 1024 * 0.8  # Assume 8GB, use 80%
+            # GPU context failed - disable GPU and fall back to CPU
+            if logger:
+                logger.warning(
+                    f"GPU context initialization failed, falling back to CPU-only mode: {str(e)}"
+                )
+            gpu_usable_mem = 0
     else:
-        gpu_usable_mem = 0
-        logger.info("   No GPU available - using CPU only")
+        if logger:
+            logger.info("   No GPU available - using CPU only")
 
     # Get system memory information
     try:
@@ -866,19 +872,21 @@ def get_memory_info(logger=None):
         system_usable_mem = (
             available_system_mem * 0.6
         )  # Use 60% of available memory (conservative)
-        logger.info(
-            f"   RAM: {total_system_mem / 1e9:.2f} GB total | {available_system_mem / 1e9:.2f} GB available | {system_usable_mem / 1e9:.2f} GB usable"
-        )
+        if logger:
+            logger.info(
+                f"   RAM: {total_system_mem / 1e9:.2f} GB total | {available_system_mem / 1e9:.2f} GB available | {system_usable_mem / 1e9:.2f} GB usable"
+            )
     except Exception as e:
-        logger.warning(
-            f"Could not determine system memory, assuming 16GB: {str(e)}"
-        )
+        if logger:
+            logger.warning(
+                f"Could not determine system memory, assuming 16GB: {str(e)}"
+            )
         system_usable_mem = 16 * 1024 * 1024 * 1024 * 0.6  # Assume 16GB, use 60%
 
     return gpu_usable_mem, system_usable_mem
 
 
-def estimate_field_memory_requirements(ms_file, field_id, sample_baseline_count=5, logger=None):
+def estimate_field_memory_requirements(ms_file, field_id, datacolumn="DATA", sample_baseline_count=5, logger=None):
     """
     Estimate memory requirements for processing a single field.
     Samples a few baselines to get accurate estimates.
@@ -886,9 +894,10 @@ def estimate_field_memory_requirements(ms_file, field_id, sample_baseline_count=
     try:
         # Get a few sample baselines to estimate data size
         taql_where = f"FIELD_ID={field_id}"
-        sample_ds_list = xds_from_ms(
+        sample_ds_list = read_data_column(
             ms_file,
-            columns=("DATA", "FLAG", "ANTENNA1", "ANTENNA2"),
+            datacolumn,
+            columns_tuple=("DATA", "FLAG", "ANTENNA1", "ANTENNA2"),
             taql_where=taql_where,
             chunks={"row": 10000},
         )
@@ -923,7 +932,7 @@ def estimate_field_memory_requirements(ms_file, field_id, sample_baseline_count=
         return 30 * 1024 * 1024 * 1024
 
 
-def determine_parallel_field_count(ms_file, field_ids, available_memory, logger=None):
+def determine_parallel_field_count(ms_file, field_ids, available_memory, datacolumn="DATA", logger=None):
     """
     Determine how many fields can be processed in parallel based on available memory.
     """
@@ -931,7 +940,7 @@ def determine_parallel_field_count(ms_file, field_ids, available_memory, logger=
         return 1
 
     # Estimate memory for first field (assume all fields are similar size)
-    field_mem = estimate_field_memory_requirements(ms_file, field_ids[0], logger=logger)
+    field_mem = estimate_field_memory_requirements(ms_file, field_ids[0], datacolumn=datacolumn, logger=logger)
 
     if field_mem == 0:
         return 1
@@ -2720,7 +2729,7 @@ def hunt_ms(ms_file, options):
 
     # Determine if we can process fields in parallel
     parallel_fields = determine_parallel_field_count(
-        ms_file, field_ids, system_usable_mem, logger=logger
+        ms_file, field_ids, system_usable_mem, datacolumn=datacolumn, logger=logger
     )
 
     # DISABLE parallel field processing to avoid MS locking issues

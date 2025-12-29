@@ -2459,93 +2459,93 @@ def process_single_field(
 
                     # Write flags if requested
                     if options["apply_flags"]:
-                        try:
-                            # Process each baseline separately
-                            for bl in batch_results.keys():
+                        # Process each baseline separately
+                        for bl in batch_results.keys():
+                            try:
                                 if options["verbose"]:
                                     logger.debug(f"Writing flags for baseline {bl}...")
 
-                            # Create baseline-specific query
-                            bl_taql = f"FIELD_ID={field_id} AND ANTENNA1={bl[0]} AND ANTENNA2={bl[1]}"
+                                # Create baseline-specific query
+                                bl_taql = f"FIELD_ID={field_id} AND ANTENNA1={bl[0]} AND ANTENNA2={bl[1]}"
 
-                            # Read original data
-                            orig_ds_list = xds_from_ms(
-                                ms_file,
-                                columns=("FLAG",),
-                                taql_where=bl_taql,
-                            )
+                                # Read original data
+                                orig_ds_list = xds_from_ms(
+                                    ms_file,
+                                    columns=("FLAG",),
+                                    taql_where=bl_taql,
+                                )
 
-                            if not orig_ds_list or orig_ds_list[0].sizes["row"] == 0:
-                                logger.warning(f"No data found for baseline {bl}. Skipping.")
-                                continue
+                                if not orig_ds_list or orig_ds_list[0].sizes["row"] == 0:
+                                    logger.warning(f"No data found for baseline {bl}. Skipping.")
+                                    continue
 
-                            # Get original dataset and flags
-                            orig_ds = orig_ds_list[0]
-                            orig_flags = orig_ds.FLAG.data.compute()
+                                # Get original dataset and flags
+                                orig_ds = orig_ds_list[0]
+                                orig_flags = orig_ds.FLAG.data.compute()
 
-                            # Get new flags
-                            bl_flags = batch_results[bl]
+                                # Get new flags
+                                bl_flags = batch_results[bl]
 
-                            # Handle broadcasting from 2D to 3D if needed
-                            if len(orig_flags.shape) == 3 and len(bl_flags.shape) == 2:
-                                # Create output with same shape as original flags
-                                combined_flags = orig_flags.copy()
-
-                                # Apply new flags to ALL correlations, not just the ones in corr_to_process
-                                for corr_idx in range(orig_flags.shape[2]):
-                                    combined_flags[:, :, corr_idx] = np.logical_or(
-                                        orig_flags[:, :, corr_idx], bl_flags
-                                    )
-                            else:
-                                # If we already have 3D flags from processing specific correlations
-                                # Make sure all correlations get the flags
-                                if (
-                                    len(bl_flags.shape) == 3
-                                    and bl_flags.shape[2] < orig_flags.shape[2]
-                                ):
+                                # Handle broadcasting from 2D to 3D if needed
+                                if len(orig_flags.shape) == 3 and len(bl_flags.shape) == 2:
+                                    # Create output with same shape as original flags
                                     combined_flags = orig_flags.copy()
 
-                                    # Apply processed correlation flags to all correlations
-                                    processed_flags = np.any(
-                                        bl_flags, axis=2, keepdims=True
-                                    )
+                                    # Apply new flags to ALL correlations, not just the ones in corr_to_process
                                     for corr_idx in range(orig_flags.shape[2]):
                                         combined_flags[:, :, corr_idx] = np.logical_or(
-                                            orig_flags[:, :, corr_idx],
-                                            processed_flags[:, :, 0],
+                                            orig_flags[:, :, corr_idx], bl_flags
                                         )
                                 else:
-                                    # If shapes already match
-                                    combined_flags = np.logical_or(orig_flags, bl_flags)
+                                    # If we already have 3D flags from processing specific correlations
+                                    # Make sure all correlations get the flags
+                                    if (
+                                        len(bl_flags.shape) == 3
+                                        and bl_flags.shape[2] < orig_flags.shape[2]
+                                    ):
+                                        combined_flags = orig_flags.copy()
 
-                            # Convert back to dask array with SAME chunking
-                            new_flags_dask = da.from_array(
-                                combined_flags, chunks=orig_ds.FLAG.data.chunks
-                            )
+                                        # Apply processed correlation flags to all correlations
+                                        processed_flags = np.any(
+                                            bl_flags, axis=2, keepdims=True
+                                        )
+                                        for corr_idx in range(orig_flags.shape[2]):
+                                            combined_flags[:, :, corr_idx] = np.logical_or(
+                                                orig_flags[:, :, corr_idx],
+                                                processed_flags[:, :, 0],
+                                            )
+                                    else:
+                                        # If shapes already match
+                                        combined_flags = np.logical_or(orig_flags, bl_flags)
 
-                            # Create updated dataset
-                            updated_ds = orig_ds.assign(
-                                FLAG=(orig_ds.FLAG.dims, new_flags_dask)
-                            )
+                                # Convert back to dask array with SAME chunking
+                                new_flags_dask = da.from_array(
+                                    combined_flags, chunks=orig_ds.FLAG.data.chunks
+                                )
 
-                            # Write back
-                            write_back = xds_to_table([updated_ds], ms_file, ["FLAG"])
-                            dask.compute(write_back)
+                                # Create updated dataset
+                                updated_ds = orig_ds.assign(
+                                    FLAG=(orig_ds.FLAG.dims, new_flags_dask)
+                                )
 
-                            # Clean up
-                            orig_ds_list = None
-                            orig_ds = None
-                            orig_flags = None
-                            combined_flags = None
-                            new_flags_dask = None
-                            updated_ds = None
-                            gc.collect()
+                                # Write back
+                                write_back = xds_to_table([updated_ds], ms_file, ["FLAG"])
+                                dask.compute(write_back)
 
-                        except Exception as e:
-                            logger.error(f"Error writing flags: {str(e)}")
-                            import traceback
+                                # Clean up this baseline's data immediately
+                                orig_ds_list = None
+                                orig_ds = None
+                                orig_flags = None
+                                combined_flags = None
+                                new_flags_dask = None
+                                updated_ds = None
+                                gc.collect()
 
-                            traceback.print_exc()
+                            except Exception as e:
+                                logger.error(f"Error writing flags for baseline {bl}: {str(e)}")
+                                import traceback
+                                traceback.print_exc()
+                                continue
                 else:
                     logger.info(f"All {len(valid_baseline_data)} baselines processed (apply_flags=False, flags not written)")
 

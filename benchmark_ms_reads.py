@@ -40,35 +40,11 @@ def benchmark_daskms_or_query(ms_file, field_id, baselines, chunk_size):
 
 
 def benchmark_daskms_sequential(ms_file, field_id, baselines, chunk_size):
-    """daskms reading entire field, filter in memory"""
+    """daskms reading entire field, filter in memory - SKIPPED (causes OOM)"""
     print("\n2. Testing daskms sequential (no OR query)...")
-
-    taql_where = f"FIELD_ID={field_id}"
-
-    start = time.time()
-
-    ds_list = xds_from_ms(
-        ms_file,
-        columns=("DATA", "FLAG", "ANTENNA1", "ANTENNA2"),
-        taql_where=taql_where,
-        chunks={"row": chunk_size},
-    )
-
-    # Compute and filter
-    for ds in ds_list:
-        ant1, ant2, data, flags = dask.compute(
-            ds.ANTENNA1.data, ds.ANTENNA2.data, ds.DATA.data, ds.FLAG.data
-        )
-
-        # Filter by baseline in memory
-        for bl in baselines:
-            mask = (ant1 == bl[0]) & (ant2 == bl[1])
-            bl_data = data[mask]
-            bl_flags = flags[mask]
-
-    elapsed = time.time() - start
-    print(f"   Time: {elapsed:.2f} seconds")
-    return elapsed
+    print("   SKIPPED: Would cause OOM on systems with limited RAM")
+    print("   (Tries to load entire field into memory)")
+    return None
 
 
 def benchmark_casacore_or_query(ms_file, field_id, baselines):
@@ -99,35 +75,36 @@ def benchmark_casacore_or_query(ms_file, field_id, baselines):
 
 
 def benchmark_casacore_sequential(ms_file, field_id, baselines):
-    """casacore table sequential read of entire field"""
-    print("\n4. Testing casacore table sequential (ENTIRE FIELD)...")
+    """casacore table - read antennas first, then query each baseline"""
+    print("\n4. Testing casacore table (ANTENNA SCAN + INDIVIDUAL QUERIES)...")
 
     start = time.time()
 
     with table(ms_file) as t:
+        # First: Quick scan to identify which baselines exist
         t_field = t.query(f"FIELD_ID=={field_id}")
-
-        # Read ALL data for field sequentially
         ant1 = t_field.getcol("ANTENNA1")
         ant2 = t_field.getcol("ANTENNA2")
-        data = t_field.getcol("DATA")
-        flags = t_field.getcol("FLAG")
+        t_field.close()
 
-        # Filter by baseline in memory
+        # Second: Query each baseline individually
         baseline_data = {}
         for bl in baselines:
+            # Check if baseline exists
             mask = (ant1 == bl[0]) & (ant2 == bl[1])
-            baseline_data[bl] = {
-                "data": data[mask],
-                "flags": flags[mask]
-            }
-
-        t_field.close()
+            if np.any(mask):
+                # Query this specific baseline
+                taql_query = f"FIELD_ID=={field_id} && ANTENNA1=={bl[0]} && ANTENNA2=={bl[1]}"
+                t_bl = t.query(taql_query)
+                baseline_data[bl] = {
+                    "data": t_bl.getcol("DATA"),
+                    "flags": t_bl.getcol("FLAG")
+                }
+                t_bl.close()
 
     elapsed = time.time() - start
     print(f"   Time: {elapsed:.2f} seconds")
-    print(f"   Total rows read: {len(ant1)}")
-    print(f"   Baselines extracted: {len(baseline_data)}")
+    print(f"   Baselines found: {len(baseline_data)}")
     return elapsed
 
 

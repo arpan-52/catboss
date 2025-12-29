@@ -2459,11 +2459,12 @@ def process_single_field(
 
                     # Write flags if requested
                     if options["apply_flags"]:
+                        logger.info(f"Writing flags for {len(batch_results)} baselines to MS...")
                         # Process each baseline separately
-                        for bl in batch_results.keys():
+                        for bl_idx, bl in enumerate(batch_results.keys(), 1):
                             try:
                                 if options["verbose"]:
-                                    logger.debug(f"Writing flags for baseline {bl}...")
+                                    logger.debug(f"  [{bl_idx}/{len(batch_results)}] Writing baseline {bl}...")
 
                                 # Create baseline-specific query
                                 bl_taql = f"FIELD_ID={field_id} AND ANTENNA1={bl[0]} AND ANTENNA2={bl[1]}"
@@ -2546,6 +2547,7 @@ def process_single_field(
                                 import traceback
                                 traceback.print_exc()
                                 continue
+                        logger.info(f"✓ Flags written for {len(batch_results)} baselines")
                 else:
                     logger.info(f"All {len(valid_baseline_data)} baselines processed (apply_flags=False, flags not written)")
 

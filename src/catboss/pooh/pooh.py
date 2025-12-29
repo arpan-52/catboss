@@ -14,20 +14,22 @@ import psutil
 import concurrent.futures
 
 # Check GPU availability and import Numba
+CUDA_CONTEXT = None  # Global context cache
 try:
     from numba import cuda, jit, prange
 
     GPU_AVAILABLE = False  # Default to False
     if cuda.is_available():
-        # Test if GPU context actually works
+        # Test if GPU context actually works and cache it
         try:
-            ctx = cuda.current_context()
-            ctx.get_memory_info()  # This will segfault if GPU is broken
+            CUDA_CONTEXT = cuda.current_context()
+            free, total = CUDA_CONTEXT.get_memory_info()
             GPU_AVAILABLE = True
-            print("GPU detected and verified - will use GPU acceleration")
+            print(f"GPU verified - {total/1e9:.2f} GB VRAM - using GPU acceleration")
         except Exception as e:
-            print(f"GPU detected but context failed: {e} - using CPU only")
+            print(f"GPU context test failed: {e} - using CPU only")
             GPU_AVAILABLE = False
+            CUDA_CONTEXT = None
     else:
         print("No GPU detected - will use CPU processing")
 except Exception as e:
@@ -36,6 +38,7 @@ except Exception as e:
 
     GPU_AVAILABLE = False
     cuda = None
+    CUDA_CONTEXT = None
 
 
 def read_data_column(ms_file, datacolumn, columns_tuple, taql_where=None, chunks=None):
@@ -857,21 +860,20 @@ def get_memory_info(logger=None):
     """Get information about available GPU and system memory"""
     # Get GPU memory information
     gpu_usable_mem = 0
-    if GPU_AVAILABLE:
+    if GPU_AVAILABLE and CUDA_CONTEXT is not None:
         try:
-            # Force context creation if needed
-            ctx = cuda.current_context()
-            free_mem, total_mem = ctx.get_memory_info()
+            # Reuse cached context instead of creating new one
+            free_mem, total_mem = CUDA_CONTEXT.get_memory_info()
             gpu_usable_mem = free_mem * 0.9  # Use 90% of free memory to be safe
             if logger:
                 logger.info(
                     f"   GPU: {total_mem / 1e9:.2f} GB total | {free_mem / 1e9:.2f} GB free | {gpu_usable_mem / 1e9:.2f} GB usable"
                 )
         except Exception as e:
-            # GPU context failed - disable GPU and fall back to CPU
+            # GPU memory query failed - disable GPU and fall back to CPU
             if logger:
                 logger.warning(
-                    f"GPU context initialization failed, falling back to CPU-only mode: {str(e)}"
+                    f"GPU memory query failed, falling back to CPU-only mode: {str(e)}"
                 )
             gpu_usable_mem = 0
     else:

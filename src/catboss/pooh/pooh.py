@@ -17,9 +17,17 @@ import concurrent.futures
 try:
     from numba import cuda, jit, prange
 
-    GPU_AVAILABLE = cuda.is_available()
-    if GPU_AVAILABLE:
-        print("GPU detected - will use GPU acceleration")
+    GPU_AVAILABLE = False  # Default to False
+    if cuda.is_available():
+        # Test if GPU context actually works
+        try:
+            ctx = cuda.current_context()
+            ctx.get_memory_info()  # This will segfault if GPU is broken
+            GPU_AVAILABLE = True
+            print("GPU detected and verified - will use GPU acceleration")
+        except Exception as e:
+            print(f"GPU detected but context failed: {e} - using CPU only")
+            GPU_AVAILABLE = False
     else:
         print("No GPU detected - will use CPU processing")
 except Exception as e:
@@ -1236,7 +1244,11 @@ def process_baselines_batch_gpu(
             existing_flags_combined = np.logical_or(flags_0, flags_1)
 
             # Calculate bandpass (median across time for each channel) - OPTIMIZED
+            if options.get("verbose"):
+                logger.debug(f"Calculating bandpass for baseline {bl}, shape: {vis_amp.shape}")
             bandpass = calculate_bandpass_parallel(vis_amp, existing_flags_combined)
+            if options.get("verbose"):
+                logger.debug(f"Bandpass calculated for baseline {bl}")
 
             # Apply bandpass normalization using polynomial fitting
             smooth_bandpass, rfi_channels, fit_valid = (
@@ -2376,13 +2388,20 @@ def process_single_field(
                 if valid_baseline_data:
                     logger.info(f"Processing {len(valid_baseline_data)} baselines from this batch...")
                     # Process batch with optimized GPU code
-                    batch_results = process_baselines_batch_gpu(
-                        valid_baseline_data,
-                        field_id,
-                        corr_to_process,
-                        options,
-                        freq_axis,
-                    )
+                    try:
+                        batch_results = process_baselines_batch_gpu(
+                            valid_baseline_data,
+                            field_id,
+                            corr_to_process,
+                            options,
+                            freq_axis,
+                        )
+                    except Exception as e:
+                        logger.error(f"Batch processing failed with error: {str(e)}")
+                        logger.error("This might be a GPU issue. Try running with CPU-only mode.")
+                        logger.error("Falling back to single baseline processing...")
+                        # Force raise to trigger the fallback in the outer try-except
+                        raise
 
                     # Process results
                     for bl, flags in batch_results.items():

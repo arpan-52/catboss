@@ -1047,10 +1047,17 @@ def calculate_baseline_batch_size(
     # Take the minimum of the two limits
     bl_batch_size = min(gpu_bl_limit, system_bl_limit)
 
+    # SAFETY: Reduce batch size by 40% to account for:
+    # - dask.compute() intermediate arrays
+    # - Python GC delays
+    # - OS and other processes
+    # This prevents OOM kills on systems with limited RAM
+    bl_batch_size = max(1, int(bl_batch_size * 0.6))
+
     logger.info("Based on memory constraints:")
     logger.info(f"  - GPU limit: {gpu_bl_limit} baselines")
     logger.info(f"  - System memory limit: {system_bl_limit} baselines")
-    logger.info(f"  - Selected batch size: {bl_batch_size} baselines")
+    logger.info(f"  - Selected batch size (with 40% safety margin): {bl_batch_size} baselines")
 
     # # Add a fixed upper limit to be safe
     # max_batch_size = 20
@@ -2307,6 +2314,14 @@ def process_single_field(
         if bl_per_batch > 1:
             # Batch processing is possible
             for i in range(0, len(valid_baselines), bl_per_batch):
+                # CRITICAL: Free memory from previous batch BEFORE loading new one
+                gc.collect()
+                if GPU_AVAILABLE:
+                    try:
+                        cuda.synchronize()
+                    except:
+                        pass
+
                 batch = valid_baselines[i : i + bl_per_batch]
                 batch_size = len(batch)
 
@@ -2326,12 +2341,13 @@ def process_single_field(
                     f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
                 )
 
-                # Read data
-                logger.info(f"  [I/O] Reading data from MS file...")
+                # Read data with chunking for HDD optimization
+                logger.info(f"  [I/O] Reading data from MS file (chunk_size={chunk_size})...")
                 batch_ds_list = xds_from_ms(
                     ms_file,
                     columns=("DATA", "FLAG", "ANTENNA1", "ANTENNA2"),
                     taql_where=taql_where,
+                    chunks={"row": chunk_size},  # Use configurable chunk size
                 )
 
                 # Dictionary to store baseline data

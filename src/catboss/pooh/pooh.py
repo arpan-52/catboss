@@ -1047,17 +1047,10 @@ def calculate_baseline_batch_size(
     # Take the minimum of the two limits
     bl_batch_size = min(gpu_bl_limit, system_bl_limit)
 
-    # SAFETY: Reduce batch size by 40% to account for:
-    # - dask.compute() intermediate arrays
-    # - Python GC delays
-    # - OS and other processes
-    # This prevents OOM kills on systems with limited RAM
-    bl_batch_size = max(1, int(bl_batch_size * 0.6))
-
     logger.info("Based on memory constraints:")
     logger.info(f"  - GPU limit: {gpu_bl_limit} baselines")
     logger.info(f"  - System memory limit: {system_bl_limit} baselines")
-    logger.info(f"  - Selected batch size (with 40% safety margin): {bl_batch_size} baselines")
+    logger.info(f"  - Selected batch size: {bl_batch_size} baselines")
 
     # # Add a fixed upper limit to be safe
     # max_batch_size = 20

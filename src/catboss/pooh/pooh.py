@@ -2678,7 +2678,8 @@ def process_single_field(
                         traceback.print_exc()
 
                 # Clean up
-                stream.synchronize()
+                if stream:
+                    stream.synchronize()
                 bl_ds_list = None
                 bl_data = None
                 bl_flags = None

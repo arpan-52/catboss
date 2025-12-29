@@ -674,11 +674,17 @@ def sumthreshold_gpu(
     """
     # Handle stream and synchronization only if GPU is available
     if GPU_AVAILABLE:
-        # Ensure we have a stream for proper synchronization
-        if stream is None:
-            stream = cuda.stream()
-        # Synchronize before starting
-        cuda.synchronize()
+        try:
+            # Ensure we have a stream for proper synchronization
+            if stream is None:
+                stream = cuda.stream()
+            # Synchronize before starting
+            cuda.synchronize()
+        except Exception as e:
+            # GPU stream/sync failed - disable GPU for this run
+            if logger:
+                logger.warning(f"GPU synchronization failed, falling back to CPU: {str(e)}")
+            stream = None
 
     # Log info
     if baseline_info and logger:
@@ -1160,11 +1166,20 @@ def process_baselines_batch_gpu(
     total_start_time = time.time()
 
     # Create a main CUDA stream if GPU available
+    main_stream = None
+    use_gpu = False
     if GPU_AVAILABLE:
-        main_stream = cuda.stream()
-        cuda.synchronize()  # Synchronize before starting
-    else:
-        main_stream = None
+        try:
+            main_stream = cuda.stream()
+            cuda.synchronize()  # Synchronize before starting
+            use_gpu = True
+            if logger:
+                logger.debug("GPU stream created successfully")
+        except Exception as e:
+            if logger:
+                logger.warning(f"Failed to create GPU stream, falling back to CPU: {str(e)}")
+            main_stream = None
+            use_gpu = False
 
     # Extract baselines to process
     baselines = list(baseline_data.keys())
@@ -1341,12 +1356,19 @@ def process_baselines_batch_gpu(
 
     # Process each baseline/correlation with dedicated CUDA streams
     # Use a pool of streams for parallel execution
-    if GPU_AVAILABLE:
-        num_streams = min(5, len(threshold_arrays))  # Limit number of streams
-        streams = [cuda.stream() for _ in range(num_streams)]
-    else:
-        num_streams = 1
-        streams = [None]
+    streams = [None]
+    num_streams = 1
+    if use_gpu:  # Only if GPU stream creation succeeded
+        try:
+            num_streams = min(5, len(threshold_arrays))  # Limit number of streams
+            streams = [cuda.stream() for _ in range(num_streams)]
+            if logger:
+                logger.debug(f"Created {num_streams} GPU streams for parallel processing")
+        except Exception as e:
+            if logger:
+                logger.warning(f"Failed to create GPU streams, using CPU: {str(e)}")
+            streams = [None]
+            num_streams = 1
 
     # Distribute work among streams
     stream_idx = 0
@@ -1647,10 +1669,14 @@ def process_baseline_async(
 
     # Create a stream if not provided and GPU is available
     if GPU_AVAILABLE:
-        if stream is None:
-            stream = cuda.stream()
-        # Synchronize to ensure clean GPU state
-        cuda.synchronize()
+        try:
+            if stream is None:
+                stream = cuda.stream()
+            # Synchronize to ensure clean GPU state
+            cuda.synchronize()
+        except Exception as e:
+            logger.warning(f"GPU stream creation failed, using CPU: {str(e)}")
+            stream = None
 
     if len(corr_to_process) == 1:
         # Process a single correlation
@@ -2543,7 +2569,13 @@ def process_single_field(
 
                 # Process this baseline
                 # Create a dedicated stream (if GPU available)
-                stream = cuda.stream() if GPU_AVAILABLE else None
+                stream = None
+                if GPU_AVAILABLE:
+                    try:
+                        stream = cuda.stream()
+                    except Exception as e:
+                        logger.warning(f"Failed to create GPU stream for baseline {bl}, using CPU: {str(e)}")
+                        stream = None
 
                 # Process baseline
                 all_flags, baseline_existing, baseline_new = process_baseline_async(

@@ -2523,6 +2523,7 @@ def process_single_field(
                 baseline_data = None
                 valid_baseline_data = None
                 batch_results = None
+                dataset_cache = None  # Clear cached data to prevent memory leak!
 
                 # Force gc
                 gc.collect()

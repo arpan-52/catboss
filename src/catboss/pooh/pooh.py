@@ -2141,54 +2141,61 @@ def process_single_field(
                     logger.warning(f"  Baseline {bl} not found in preloaded data, skipping")
                     baselines_skipped += 1
         else:
-            # Read from MS for pre-filtering
-            baseline_clauses = []
-            for ant1, ant2 in baselines:
-                baseline_clauses.append(f"(ANTENNA1={ant1} AND ANTENNA2={ant2})")
+            # Read from MS for pre-filtering in BATCHES to avoid OOM
+            # Process 25 baselines at a time
+            batch_size_prefilter = 25
 
-            taql_where_all = f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
+            for batch_start in range(0, len(baselines), batch_size_prefilter):
+                batch_end = min(batch_start + batch_size_prefilter, len(baselines))
+                batch_baselines = baselines[batch_start:batch_end]
 
-            # Read only FLAG column for all baselines with configurable chunks
-            flag_ds_list = xds_from_ms(
-                ms_file,
-                columns=("FLAG", "ANTENNA1", "ANTENNA2"),
-                taql_where=taql_where_all,
-                chunks={"row": chunk_size},
-            )
+                baseline_clauses = []
+                for ant1, ant2 in batch_baselines:
+                    baseline_clauses.append(f"(ANTENNA1={ant1} AND ANTENNA2={ant2})")
 
-            # Check each baseline
-            for ds in flag_ds_list:
-                ant1, ant2, flags = dask.compute(
-                    ds.ANTENNA1.data, ds.ANTENNA2.data, ds.FLAG.data
+                taql_where_batch = f"FIELD_ID={field_id} AND ({' OR '.join(baseline_clauses)})"
+
+                # Read only FLAG column for this batch
+                flag_ds_list = xds_from_ms(
+                    ms_file,
+                    columns=("FLAG", "ANTENNA1", "ANTENNA2"),
+                    taql_where=taql_where_batch,
+                    chunks={"row": chunk_size},
                 )
 
-                # Group by baseline
-                baseline_flags = {}
-                for i, (a1, a2) in enumerate(zip(ant1, ant2)):
-                    bl = (a1, a2)
-                    if bl not in baseline_flags:
-                        baseline_flags[bl] = []
-                    baseline_flags[bl].append(flags[i])
+                # Check each baseline in this batch
+                for ds in flag_ds_list:
+                    ant1, ant2, flags = dask.compute(
+                        ds.ANTENNA1.data, ds.ANTENNA2.data, ds.FLAG.data
+                    )
 
-                # Check if completely flagged
-                for bl, flag_list in baseline_flags.items():
-                    combined_flags = np.concatenate(flag_list, axis=0)
-                    is_completely_flagged = np.all(combined_flags)
-                    baseline_flag_map[bl] = is_completely_flagged
+                    # Group by baseline
+                    baseline_flags = {}
+                    for i, (a1, a2) in enumerate(zip(ant1, ant2)):
+                        bl = (a1, a2)
+                        if bl not in baseline_flags:
+                            baseline_flags[bl] = []
+                        baseline_flags[bl].append(flags[i])
 
-                    if is_completely_flagged:
-                        if options["verbose"]:
-                            logger.debug(f"  Baseline {bl}: 100% flagged - SKIP")
-                        baselines_skipped += 1
-                    else:
-                        if options["verbose"]:
-                            percent_flagged = (
-                                100 * np.sum(combined_flags) / combined_flags.size
-                            )
-                            logger.debug(
-                                f"  Baseline {bl}: {percent_flagged:.1f}% flagged - PROCESS"
-                            )
-                        valid_baselines_set.add(bl)  # Use set to avoid duplicates
+                    # Check if completely flagged
+                    for bl, flag_list in baseline_flags.items():
+                        combined_flags = np.concatenate(flag_list, axis=0)
+                        is_completely_flagged = np.all(combined_flags)
+                        baseline_flag_map[bl] = is_completely_flagged
+
+                        if is_completely_flagged:
+                            if options["verbose"]:
+                                logger.debug(f"  Baseline {bl}: 100% flagged - SKIP")
+                            baselines_skipped += 1
+                        else:
+                            if options["verbose"]:
+                                percent_flagged = (
+                                    100 * np.sum(combined_flags) / combined_flags.size
+                                )
+                                logger.debug(
+                                    f"  Baseline {bl}: {percent_flagged:.1f}% flagged - PROCESS"
+                                )
+                            valid_baselines_set.add(bl)  # Use set to avoid duplicates
 
         valid_baselines = list(valid_baselines_set)  # Convert to list
 
